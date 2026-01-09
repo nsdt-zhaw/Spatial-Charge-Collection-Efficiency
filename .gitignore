@@ -25,6 +25,7 @@ wheels/
 
 # Claude Code
 .claude/
+.claude.md
 
 # Streamlit
 .streamlit/
