@@ -746,7 +746,7 @@ with col_param3:
 st.markdown("---")
 col_btn1, col_btn2 = st.columns(2)
 with col_btn1:
-    run_analysis = st.button("Run Automatic Analysis", type="primary", use_container_width=True)
+    run_analysis = st.button("Run Analysis", type="primary", use_container_width=True)
 with col_btn2:
     if st.button("Open Manual Fitting", type="secondary", use_container_width=True):
         st.session_state.manual_fitting_open = True

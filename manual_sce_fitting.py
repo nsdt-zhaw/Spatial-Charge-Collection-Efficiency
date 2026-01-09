@@ -285,15 +285,6 @@ def manual_sce_fitting_tab(pos, gen, eqe, sun_spec, use_white_light, gen_wavelen
     mae = np.mean(np.abs(eqe_vals_interp - eqe_fitted))
     r2 = 1 - np.sum((eqe_vals_interp - eqe_fitted)**2) / np.sum((eqe_vals_interp - np.mean(eqe_vals_interp))**2)
 
-    # Display metrics
-    st.markdown("---")
-    st.subheader("Fit quality metrics")
-    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-    col_m1.metric("MSE", f"{mse:.6f}")
-    col_m2.metric("RMSE", f"{rmse:.6f}")
-    col_m3.metric("MAE", f"{mae:.6f}")
-    col_m4.metric("R²", f"{r2:.4f}")
-
     # Create plots
     st.markdown("---")
     st.subheader("Results")
@@ -377,6 +368,15 @@ def manual_sce_fitting_tab(pos, gen, eqe, sun_spec, use_white_light, gen_wavelen
         )
 
         st.plotly_chart(fig_eqe, use_container_width=True)
+
+    # Display metrics
+    st.markdown("---")
+    st.subheader("Fit quality metrics")
+    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    col_m1.metric("MSE", f"{mse:.6f}")
+    col_m2.metric("RMSE", f"{rmse:.6f}")
+    col_m3.metric("MAE", f"{mae:.6f}")
+    col_m4.metric("R²", f"{r2:.4f}")
 
     # Optional: Generation profile visualization
     show_generation = st.checkbox(
