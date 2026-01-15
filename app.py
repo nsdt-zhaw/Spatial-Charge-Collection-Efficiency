@@ -752,7 +752,7 @@ with col_param2:
                 "Weight factor",
                 value=10.0,
                 min_value=1.0,
-                max_value=1000.0,
+                max_value=1000000.0,
                 step=1.0,
                 key="weight_factor",
                 help="How much more important the selected region is (e.g., 10 = 10× weight)"
