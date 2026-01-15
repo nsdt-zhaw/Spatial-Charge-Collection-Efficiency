@@ -958,8 +958,8 @@ if run_analysis and eqe_file and gen_file and sun_file:
         st.session_state.wl_min = wl_min
         st.session_state.wl_max = wl_max
         st.session_state.use_first_derivative = use_first_derivative
-        st.session_state.cv_wl_min = cv_wl_min
-        st.session_state.cv_wl_max = cv_wl_max
+        st.session_state.cv_wl_min_used = cv_wl_min
+        st.session_state.cv_wl_max_used = cv_wl_max
         st.session_state.cv_wl_mask = cv_wl_mask
 
 # Display results if analysis has been run
@@ -980,8 +980,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
     use_bounded_opt = st.session_state.get('use_bounded_opt', False)
     eqe_original_wavelengths = st.session_state.eqe_original_wavelengths
     eqe_original_values = st.session_state.eqe_original_values
-    cv_wl_min_stored = st.session_state.get('cv_wl_min', None)
-    cv_wl_max_stored = st.session_state.get('cv_wl_max', None)
+    cv_wl_min_stored = st.session_state.get('cv_wl_min_used', None)
+    cv_wl_max_stored = st.session_state.get('cv_wl_max_used', None)
     cv_wl_mask = st.session_state.get('cv_wl_mask', None)
 
     # Interactive Alpha Slider
