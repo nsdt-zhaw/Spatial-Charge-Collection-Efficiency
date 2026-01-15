@@ -387,7 +387,7 @@ def manual_sce_fitting_tab(pos, gen, eqe, sun_spec, use_white_light, gen_wavelen
 
     if show_generation:
         # Calculate total generation
-        total_generation = np.trapz(gen, lam, axis=1)
+        total_generation = np.trapezoid(gen, lam, axis=1)
 
         # Create combined plot
         fig_combined = go.Figure()

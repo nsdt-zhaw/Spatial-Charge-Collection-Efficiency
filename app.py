@@ -162,7 +162,7 @@ def preview_generation_profile(gen_file):
 
         # Calculate total generation (integrated over wavelength)
         if len(wavelengths) == generation.shape[1]:
-            total_generation = np.trapz(generation, wavelengths, axis=1)
+            total_generation = np.trapezoid(generation, wavelengths, axis=1)
         else:
             total_generation = generation.sum(axis=1)
 
@@ -1250,7 +1250,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
     if show_gen_analysis:
         with col_gen:
             # Calculate total generation profile (integrate over wavelengths)
-            total_generation = np.trapz(gen_filtered, lam, axis=1)
+            total_generation = np.trapezoid(gen_filtered, lam, axis=1)
 
             # Calculate collected generation (SCE × total generation)
             collected_generation_current = sce_current * total_generation
@@ -1258,7 +1258,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             # Calculate cumulative Jsc (integrate from left to right)
             cumulative_jsc_current = np.zeros_like(pos)
             for i in range(1, len(pos)):
-                cumulative_jsc_current[i] = np.trapz(collected_generation_current[:i+1], pos[:i+1])
+                cumulative_jsc_current[i] = np.trapezoid(collected_generation_current[:i+1], pos[:i+1])
 
             # Convert to mA/cm^2
             q = 1.602e-19  # Coulombs

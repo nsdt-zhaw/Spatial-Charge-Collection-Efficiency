@@ -909,7 +909,7 @@ def generation_profile_creator():
                     from plotly.subplots import make_subplots
                     
                     # Calculate total generation (integrated over wavelength)
-                    total_generation = np.trapz(generation, wavelengths, axis=1)
+                    total_generation = np.trapezoid(generation, wavelengths, axis=1)
                     
                     # Calculate absorptance in active layer for each wavelength
                     absorptance_active = []
@@ -1265,7 +1265,7 @@ def generation_profile_creator():
                     # ========================================================
                     
                     # Calculate approximate generation current
-                    total_gen_cm2 = np.trapz(total_generation, z_positions * 1e-7)  # cm⁻²s⁻¹
+                    total_gen_cm2 = np.trapezoid(total_generation, z_positions * 1e-7)  # cm⁻²s⁻¹
                     J_gen = 1.60218e-19 * total_gen_cm2 * 1e3  # mA/cm²
                     
                     # Find peak absorptance wavelength
