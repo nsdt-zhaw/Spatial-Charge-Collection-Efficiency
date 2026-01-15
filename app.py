@@ -719,6 +719,37 @@ with col_param2:
     else:
         wl_min, wl_max = None, None
 
+    use_cv_wavelength_range = st.checkbox(
+        "Use custom CV wavelength range",
+        value=False,
+        help="Calculate cross-validation MSE only within a specific wavelength region. "
+             "The fit still uses ALL wavelengths, but optimal α is determined by fit quality "
+             "in the selected region. Useful when you trust some spectral regions more than others."
+    )
+
+    if use_cv_wavelength_range:
+        cv_wl_col1, cv_wl_col2 = st.columns(2)
+        with cv_wl_col1:
+            cv_wl_min = st.number_input(
+                "CV λ min (nm)",
+                value=400,
+                min_value=300,
+                max_value=1200,
+                key="cv_wl_min",
+                help="Minimum wavelength for CV MSE calculation"
+            )
+        with cv_wl_col2:
+            cv_wl_max = st.number_input(
+                "CV λ max (nm)",
+                value=700,
+                min_value=300,
+                max_value=1200,
+                key="cv_wl_max",
+                help="Maximum wavelength for CV MSE calculation"
+            )
+    else:
+        cv_wl_min, cv_wl_max = None, None
+
 with col_param3:
     st.subheader("Regularization range")
     alpha_min = st.number_input(
@@ -853,22 +884,52 @@ if run_analysis and eqe_file and gen_file and sun_file:
 
         # Cross-validation for optimal alpha
         st.subheader("Cross-validation: finding optimal regularization")
+
+        # Create CV wavelength mask if custom range is specified
+        cv_wl_mask = None
+        if cv_wl_min is not None and cv_wl_max is not None:
+            cv_wl_mask = (lam >= cv_wl_min) & (lam <= cv_wl_max)
+            n_cv_wavelengths = np.sum(cv_wl_mask)
+            if n_cv_wavelengths == 0:
+                st.error(f"No wavelengths found in CV range [{cv_wl_min}, {cv_wl_max}] nm. "
+                        f"Available range: [{lam.min():.0f}, {lam.max():.0f}] nm")
+                st.stop()
+            st.info(f"📊 CV MSE will be calculated on {n_cv_wavelengths} wavelengths "
+                   f"in range [{cv_wl_min}, {cv_wl_max}] nm (full fit uses all {len(lam)} wavelengths)")
+
         progress_bar = st.progress(0)
         alphas = np.logspace(alpha_min, alpha_max, n_alphas)
         kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
         mse = {}
-        
+
         for idx, a in enumerate(alphas):
             errs = []
             for tr, val in kf.split(X):
                 m = CustomRidgeDirect(alpha=a, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
                 m.fit(X[tr], y[tr])
-                errs.append(mean_squared_error(y[val], m.predict(X[val])))
-            mse[a] = np.mean(errs)
+
+                # Calculate MSE on validation set
+                y_val_pred = m.predict(X[val])
+                y_val_true = y[val]
+
+                # If CV wavelength range is specified, only compute MSE on those wavelengths
+                if cv_wl_mask is not None:
+                    # val contains indices into X (wavelengths)
+                    # We need to find which validation indices fall within the CV wavelength range
+                    val_in_cv_range = cv_wl_mask[val]
+                    if np.sum(val_in_cv_range) > 0:
+                        errs.append(mean_squared_error(y_val_true[val_in_cv_range], y_val_pred[val_in_cv_range]))
+                    # If no validation points in CV range for this fold, skip it
+                else:
+                    errs.append(mean_squared_error(y_val_true, y_val_pred))
+
+            if errs:  # Only record if we got any errors
+                mse[a] = np.mean(errs)
             progress_bar.progress((idx + 1) / len(alphas))
-        
+
         best_alpha = min(mse, key=mse.get)
-        st.success(f"Optimal alpha: **{best_alpha:.2e}** (MSE: {mse[best_alpha]:.2e})")
+        cv_range_str = f" (CV range: {cv_wl_min}-{cv_wl_max} nm)" if cv_wl_mask is not None else ""
+        st.success(f"Optimal alpha: **{best_alpha:.2e}** (MSE: {mse[best_alpha]:.2e}){cv_range_str}")
 
         # Store results in session state for slider updates
         st.session_state.analysis_complete = True
@@ -897,6 +958,9 @@ if run_analysis and eqe_file and gen_file and sun_file:
         st.session_state.wl_min = wl_min
         st.session_state.wl_max = wl_max
         st.session_state.use_first_derivative = use_first_derivative
+        st.session_state.cv_wl_min = cv_wl_min
+        st.session_state.cv_wl_max = cv_wl_max
+        st.session_state.cv_wl_mask = cv_wl_mask
 
 # Display results if analysis has been run
 if 'analysis_complete' in st.session_state and st.session_state.analysis_complete:
@@ -916,7 +980,10 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
     use_bounded_opt = st.session_state.get('use_bounded_opt', False)
     eqe_original_wavelengths = st.session_state.eqe_original_wavelengths
     eqe_original_values = st.session_state.eqe_original_values
-    
+    cv_wl_min_stored = st.session_state.get('cv_wl_min', None)
+    cv_wl_max_stored = st.session_state.get('cv_wl_max', None)
+    cv_wl_mask = st.session_state.get('cv_wl_mask', None)
+
     # Interactive Alpha Slider
     st.markdown("---")
     st.subheader("Regularization strength")
@@ -939,10 +1006,13 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
     current_alpha = 10**log_current_alpha
     
     # Display current alpha info
-    col_info1, col_info2, col_info3 = st.columns(3)
+    if cv_wl_min_stored is not None and cv_wl_max_stored is not None:
+        col_info1, col_info2, col_info3, col_info4 = st.columns(4)
+    else:
+        col_info1, col_info2, col_info3 = st.columns(3)
     col_info1.metric("Current α", f"{current_alpha:.2e}")
     col_info2.metric("Optimal α", f"{best_alpha:.2e}")
-    
+
     # Find MSE for current alpha (interpolate if necessary)
     if current_alpha in mse:
         current_mse = mse[current_alpha]
@@ -951,10 +1021,14 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         log_alphas_array = np.log10(alphas)
         mse_array = np.array([mse[a] for a in alphas])
         current_mse = 10**np.interp(log_current_alpha, log_alphas_array, np.log10(mse_array))
-    
-    col_info3.metric("Current MSE", f"{current_mse:.2e}", 
+
+    col_info3.metric("Current MSE", f"{current_mse:.2e}",
                     delta=f"{((current_mse/mse[best_alpha] - 1)*100):.1f}%",
                     delta_color="inverse")
+
+    # Show CV wavelength range if it was used
+    if cv_wl_min_stored is not None and cv_wl_max_stored is not None:
+        col_info4.metric("CV λ range", f"{cv_wl_min_stored}-{cv_wl_max_stored} nm")
     
     # Fit model with current alpha
     model_current = CustomRidgeDirect(alpha=current_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
