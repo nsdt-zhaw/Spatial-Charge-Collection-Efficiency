@@ -719,36 +719,46 @@ with col_param2:
     else:
         wl_min, wl_max = None, None
 
-    use_cv_wavelength_range = st.checkbox(
-        "Use custom CV wavelength range",
+    use_weighted_fitting = st.checkbox(
+        "Use weighted fitting",
         value=False,
-        help="Calculate cross-validation MSE only within a specific wavelength region. "
-             "The fit still uses ALL wavelengths, but optimal α is determined by fit quality "
-             "in the selected region. Useful when you trust some spectral regions more than others."
+        help="Give higher importance to a specific wavelength region during fitting. "
+             "The fit will prioritize matching EQE in the weighted region, potentially "
+             "at the expense of fit quality elsewhere."
     )
 
-    if use_cv_wavelength_range:
-        cv_wl_col1, cv_wl_col2 = st.columns(2)
-        with cv_wl_col1:
-            cv_wl_min = st.number_input(
-                "CV λ min (nm)",
-                value=400,
+    if use_weighted_fitting:
+        weight_col1, weight_col2, weight_col3 = st.columns(3)
+        with weight_col1:
+            weight_wl_min = st.number_input(
+                "Weight λ min (nm)",
+                value=430,
                 min_value=300,
                 max_value=1200,
-                key="cv_wl_min",
-                help="Minimum wavelength for CV MSE calculation"
+                key="weight_wl_min",
+                help="Start of wavelength region to prioritize"
             )
-        with cv_wl_col2:
-            cv_wl_max = st.number_input(
-                "CV λ max (nm)",
-                value=700,
+        with weight_col2:
+            weight_wl_max = st.number_input(
+                "Weight λ max (nm)",
+                value=445,
                 min_value=300,
                 max_value=1200,
-                key="cv_wl_max",
-                help="Maximum wavelength for CV MSE calculation"
+                key="weight_wl_max",
+                help="End of wavelength region to prioritize"
+            )
+        with weight_col3:
+            weight_factor = st.number_input(
+                "Weight factor",
+                value=10.0,
+                min_value=1.0,
+                max_value=1000.0,
+                step=1.0,
+                key="weight_factor",
+                help="How much more important the selected region is (e.g., 10 = 10× weight)"
             )
     else:
-        cv_wl_min, cv_wl_max = None, None
+        weight_wl_min, weight_wl_max, weight_factor = None, None, None
 
 with col_param3:
     st.subheader("Regularization range")
@@ -885,17 +895,24 @@ if run_analysis and eqe_file and gen_file and sun_file:
         # Cross-validation for optimal alpha
         st.subheader("Cross-validation: finding optimal regularization")
 
-        # Create CV wavelength mask if custom range is specified
-        cv_wl_mask = None
-        if cv_wl_min is not None and cv_wl_max is not None:
-            cv_wl_mask = (lam >= cv_wl_min) & (lam <= cv_wl_max)
-            n_cv_wavelengths = np.sum(cv_wl_mask)
-            if n_cv_wavelengths == 0:
-                st.error(f"No wavelengths found in CV range [{cv_wl_min}, {cv_wl_max}] nm. "
+        # Create wavelength weights for weighted fitting
+        sample_weights = np.ones(len(lam))
+        if weight_wl_min is not None and weight_wl_max is not None and weight_factor is not None:
+            weight_mask = (lam >= weight_wl_min) & (lam <= weight_wl_max)
+            n_weighted = np.sum(weight_mask)
+            if n_weighted == 0:
+                st.error(f"No wavelengths found in weight range [{weight_wl_min}, {weight_wl_max}] nm. "
                         f"Available range: [{lam.min():.0f}, {lam.max():.0f}] nm")
                 st.stop()
-            st.info(f"📊 CV MSE will be calculated on {n_cv_wavelengths} wavelengths "
-                   f"in range [{cv_wl_min}, {cv_wl_max}] nm (full fit uses all {len(lam)} wavelengths)")
+            sample_weights[weight_mask] = weight_factor
+            st.info(f"⚖️ Weighted fitting: {n_weighted} wavelengths in [{weight_wl_min}, {weight_wl_max}] nm "
+                   f"have {weight_factor}× weight")
+
+        # Apply weights to X and y for weighted least squares
+        # For weighted LS: min ||W^0.5 (Xw - y)||^2 = min ||W^0.5 X w - W^0.5 y||^2
+        sqrt_weights = np.sqrt(sample_weights)
+        X_weighted = X * sqrt_weights[:, np.newaxis]
+        y_weighted = y * sqrt_weights
 
         progress_bar = st.progress(0)
         alphas = np.logspace(alpha_min, alpha_max, n_alphas)
@@ -904,32 +921,18 @@ if run_analysis and eqe_file and gen_file and sun_file:
 
         for idx, a in enumerate(alphas):
             errs = []
-            for tr, val in kf.split(X):
+            for tr, val in kf.split(X_weighted):
                 m = CustomRidgeDirect(alpha=a, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
-                m.fit(X[tr], y[tr])
-
-                # Calculate MSE on validation set
-                y_val_pred = m.predict(X[val])
-                y_val_true = y[val]
-
-                # If CV wavelength range is specified, only compute MSE on those wavelengths
-                if cv_wl_mask is not None:
-                    # val contains indices into X (wavelengths)
-                    # We need to find which validation indices fall within the CV wavelength range
-                    val_in_cv_range = cv_wl_mask[val]
-                    if np.sum(val_in_cv_range) > 0:
-                        errs.append(mean_squared_error(y_val_true[val_in_cv_range], y_val_pred[val_in_cv_range]))
-                    # If no validation points in CV range for this fold, skip it
-                else:
-                    errs.append(mean_squared_error(y_val_true, y_val_pred))
-
-            if errs:  # Only record if we got any errors
-                mse[a] = np.mean(errs)
+                m.fit(X_weighted[tr], y_weighted[tr])
+                # Validate on weighted data too
+                y_val_pred = m.predict(X_weighted[val])
+                errs.append(mean_squared_error(y_weighted[val], y_val_pred))
+            mse[a] = np.mean(errs)
             progress_bar.progress((idx + 1) / len(alphas))
 
         best_alpha = min(mse, key=mse.get)
-        cv_range_str = f" (CV range: {cv_wl_min}-{cv_wl_max} nm)" if cv_wl_mask is not None else ""
-        st.success(f"Optimal alpha: **{best_alpha:.2e}** (MSE: {mse[best_alpha]:.2e}){cv_range_str}")
+        weight_str = f" (weighted: {weight_wl_min}-{weight_wl_max} nm, {weight_factor}×)" if weight_factor is not None else ""
+        st.success(f"Optimal alpha: **{best_alpha:.2e}** (MSE: {mse[best_alpha]:.2e}){weight_str}")
 
         # Store results in session state for slider updates
         st.session_state.analysis_complete = True
@@ -958,9 +961,12 @@ if run_analysis and eqe_file and gen_file and sun_file:
         st.session_state.wl_min = wl_min
         st.session_state.wl_max = wl_max
         st.session_state.use_first_derivative = use_first_derivative
-        st.session_state.cv_wl_min_used = cv_wl_min
-        st.session_state.cv_wl_max_used = cv_wl_max
-        st.session_state.cv_wl_mask = cv_wl_mask
+        st.session_state.X_weighted = X_weighted
+        st.session_state.y_weighted = y_weighted
+        st.session_state.sample_weights = sample_weights
+        st.session_state.weight_wl_min_used = weight_wl_min
+        st.session_state.weight_wl_max_used = weight_wl_max
+        st.session_state.weight_factor_used = weight_factor
 
 # Display results if analysis has been run
 if 'analysis_complete' in st.session_state and st.session_state.analysis_complete:
@@ -980,19 +986,22 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
     use_bounded_opt = st.session_state.get('use_bounded_opt', False)
     eqe_original_wavelengths = st.session_state.eqe_original_wavelengths
     eqe_original_values = st.session_state.eqe_original_values
-    cv_wl_min_stored = st.session_state.get('cv_wl_min_used', None)
-    cv_wl_max_stored = st.session_state.get('cv_wl_max_used', None)
-    cv_wl_mask = st.session_state.get('cv_wl_mask', None)
+    X_weighted = st.session_state.get('X_weighted', X)
+    y_weighted = st.session_state.get('y_weighted', y)
+    sample_weights = st.session_state.get('sample_weights', np.ones(len(lam)))
+    weight_wl_min_stored = st.session_state.get('weight_wl_min_used', None)
+    weight_wl_max_stored = st.session_state.get('weight_wl_max_used', None)
+    weight_factor_stored = st.session_state.get('weight_factor_used', None)
 
     # Interactive Alpha Slider
     st.markdown("---")
     st.subheader("Regularization strength")
-    
+
     # Calculate log10 range for slider
     log_alpha_min = np.log10(alphas.min())
     log_alpha_max = np.log10(alphas.max())
     log_best_alpha = np.log10(best_alpha)
-    
+
     # Slider for log10(alpha)
     log_current_alpha = st.slider(
         "log₁₀(α) - Adjust to explore different regularization strengths",
@@ -1002,11 +1011,11 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         step=0.01,
         format="%.2f"
     )
-    
+
     current_alpha = 10**log_current_alpha
-    
+
     # Display current alpha info
-    if cv_wl_min_stored is not None and cv_wl_max_stored is not None:
+    if weight_factor_stored is not None:
         col_info1, col_info2, col_info3, col_info4 = st.columns(4)
     else:
         col_info1, col_info2, col_info3 = st.columns(3)
@@ -1026,26 +1035,26 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     delta=f"{((current_mse/mse[best_alpha] - 1)*100):.1f}%",
                     delta_color="inverse")
 
-    # Show CV wavelength range if it was used
-    if cv_wl_min_stored is not None and cv_wl_max_stored is not None:
-        col_info4.metric("CV λ range", f"{cv_wl_min_stored}-{cv_wl_max_stored} nm")
+    # Show weighted fitting info if it was used
+    if weight_factor_stored is not None:
+        col_info4.metric("Weight", f"{weight_wl_min_stored}-{weight_wl_max_stored} nm ({weight_factor_stored}×)")
     
-    # Fit model with current alpha
+    # Fit model with current alpha (use weighted data for fitting, unweighted for prediction/display)
     model_current = CustomRidgeDirect(alpha=current_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
-    model_current.fit(X, y)
-    y_fit_current = model_current.predict(X)
+    model_current.fit(X_weighted, y_weighted)
+    y_fit_current = model_current.predict(X)  # Predict on unweighted X for display
     sce_current = model_current.coef_
 
     # Fit model with optimal alpha
     model_optimal = CustomRidgeDirect(alpha=best_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
-    model_optimal.fit(X, y)
-    y_fit_optimal = model_optimal.predict(X)
-    
+    model_optimal.fit(X_weighted, y_weighted)
+    y_fit_optimal = model_optimal.predict(X)  # Predict on unweighted X for display
+
     # Extract SCE with uncertainty for optimal alpha
     coefs = []
-    for tr, val in kf.split(X):
+    for tr, val in kf.split(X_weighted):
         m2 = CustomRidgeDirect(alpha=best_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
-        m2.fit(X[tr], y[tr])
+        m2.fit(X_weighted[tr], y_weighted[tr])
         coefs.append(m2.coef_)
     coefs = np.vstack(coefs)
     sce_mean, sce_std = coefs.mean(0), coefs.std(0)
