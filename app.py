@@ -424,7 +424,7 @@ def read_uploaded_data(eqe_file, gen_file, sun_file, x1, x2):
         return None, None, None, None, None
 
 
-def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None, wl_min=None, wl_max=None, use_first_derivative=False):
+def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None, wl_min=None, wl_max=None, use_first_derivative=False, is_delta_photons=False):
     """Build feature matrix X, response vector y, and regularization L.
 
     Parameters:
@@ -436,7 +436,7 @@ def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None
     eqe : array
         EQE data with columns [wavelength, EQE]
     sun_spec : array
-        Solar spectrum with columns [wavelength, flux]
+        Solar spectrum with columns [wavelength, flux] OR delta photon flux with columns [wavelength, photons/s/cm²]
     use_white_light : bool
         Whether to use white light (flat spectrum)
     gen_wavelengths : array, optional
@@ -447,6 +447,8 @@ def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None
         Maximum wavelength (nm) to include in analysis
     use_first_derivative : bool, optional
         If True, use first derivative operator for regularization; if False, use second derivative (default: False)
+    is_delta_photons : bool, optional
+        If True, sun_spec contains delta photon flux [photons/s/cm²] instead of spectrum [W/m²/nm] (default: False)
 
     Returns:
     --------
@@ -459,7 +461,7 @@ def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None
     (lam, pos, photon_flux, gen) : tuple
         Wavelengths, positions, incident photon flux, and filtered generation profile
     """
-    if use_white_light:
+    if use_white_light and not is_delta_photons:
         sun_spec = sun_spec.copy()  # Don't modify original
         sun_spec[:, 1] = 1  # WHITE light
 
@@ -511,9 +513,14 @@ def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None
     weights = np.concatenate(([0.5*dp[0]], 0.5*(dp[:-1]+dp[1:]), [0.5*dp[-1]]))
     X = (gen / 1e21).T * weights
 
-    # Interpolate solar spectrum onto the target wavelengths
+    # Interpolate spectrum/delta_photons onto the target wavelengths
     interp_flux = interp1d(sun_spec[:, 0], sun_spec[:, 1], bounds_error=False, fill_value=0)
-    photon_flux = interp_flux(lam) / (h * c_nm / lam) / 1e18
+    if is_delta_photons:
+        # Delta photons file: values are already in photons/s/cm², just scale to 10^18
+        photon_flux = interp_flux(lam) / 1e18
+    else:
+        # Spectrum file: convert from W/m²/nm to 10^18 photons/s/cm²
+        photon_flux = interp_flux(lam) / (h * c_nm / lam) / 1e18
     y = eqe_vals_interp * photon_flux
 
     N = pos.size
@@ -592,8 +599,9 @@ with col_upload2:
     show_gen_preview = gen_file and st.button("Preview generation", key="preview_gen")
 
 with col_upload3:
-    st.subheader("Incident spectrum")
-    sun_source = st.radio("Source:", ["Default (Sunspectrum.sp)", "Upload"], key="sun_source", horizontal=True)
+    st.subheader("Incident spectrum / Delta photons")
+    sun_source = st.radio("Source:", ["Default (Sunspectrum.sp)", "Upload spectrum", "Delta photons file"], key="sun_source", horizontal=True)
+    is_delta_photons = (sun_source == "Delta photons file")
     if sun_source == "Default (Sunspectrum.sp)":
         if Path(default_sun_path).exists():
             sun_file = default_sun_path
@@ -601,8 +609,13 @@ with col_upload3:
         else:
             st.error("Default spectrum not found!")
             sun_file = None
-    else:
+    elif sun_source == "Upload spectrum":
         sun_file = st.file_uploader("Upload spectrum", type=['txt', 'csv', 'dat', 'sp'], key="sun_upload")
+    else:
+        sun_file = st.file_uploader("Upload delta photons file", type=['txt', 'csv', 'dat'], key="delta_photons_upload",
+                                    help="File with wavelength [nm] and delta photon flux [photons/s/cm²]")
+        if sun_file:
+            st.info("📊 Using delta photon flux directly (no spectrum conversion)")
 
 # Display EQE preview (full width outside columns)
 if 'show_eqe_preview' in locals() and show_eqe_preview and eqe_file:
@@ -865,7 +878,8 @@ if st.session_state.get('manual_fitting_open', False) and eqe_file and gen_file 
                 wl_min=wl_min,
                 wl_max=wl_max,
                 n_segments_default=n_segments_manual,
-                smoothing_factor_external=smoothing_factor_manual
+                smoothing_factor_external=smoothing_factor_manual,
+                is_delta_photons=is_delta_photons
             )
         else:
             st.error("Manual SCE fitting module not available. Please ensure manual_sce_fitting.py is in the same directory as app.py")
@@ -890,7 +904,7 @@ if run_analysis and eqe_file and gen_file and sun_file:
         eqe_original_values = eqe[:, 1].copy()
 
         # Prepare input
-        X, y, L, (lam, pos, inc_flux, gen_filtered) = prepare_input(pos, gen, eqe, sun_spec, use_white, gen_wavelengths, wl_min, wl_max, use_first_derivative)
+        X, y, L, (lam, pos, inc_flux, gen_filtered) = prepare_input(pos, gen, eqe, sun_spec, use_white, gen_wavelengths, wl_min, wl_max, use_first_derivative, is_delta_photons)
 
         # Cross-validation for optimal alpha
         st.subheader("Cross-validation: finding optimal regularization")

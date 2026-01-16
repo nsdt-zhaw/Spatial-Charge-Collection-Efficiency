@@ -83,7 +83,8 @@ def calculate_eqe_from_sce(sce, X, inc_flux):
 
 
 def manual_sce_fitting_tab(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None,
-                            wl_min=None, wl_max=None, n_segments_default=10, smoothing_factor_external=None):
+                            wl_min=None, wl_max=None, n_segments_default=10, smoothing_factor_external=None,
+                            is_delta_photons=False):
     """
     Create an interactive manual SCE fitting interface.
 
@@ -96,7 +97,7 @@ def manual_sce_fitting_tab(pos, gen, eqe, sun_spec, use_white_light, gen_wavelen
     eqe : array
         EQE data with columns [wavelength, EQE]
     sun_spec : array
-        Solar spectrum with columns [wavelength, flux]
+        Solar spectrum with columns [wavelength, flux] OR delta photon flux with columns [wavelength, photons/s/cm²]
     use_white_light : bool
         Whether to use white light spectrum
     gen_wavelengths : array, optional
@@ -109,6 +110,8 @@ def manual_sce_fitting_tab(pos, gen, eqe, sun_spec, use_white_light, gen_wavelen
         Default number of segments (default: 10)
     smoothing_factor_external : float, optional
         Smoothing factor from external control (if None, create internal slider)
+    is_delta_photons : bool, optional
+        If True, sun_spec contains delta photon flux [photons/s/cm²] instead of spectrum [W/m²/nm] (default: False)
     """
 
     st.markdown("""
@@ -122,7 +125,7 @@ def manual_sce_fitting_tab(pos, gen, eqe, sun_spec, use_white_light, gen_wavelen
     from scipy.interpolate import interp1d
 
     # Prepare the data (same as in main app)
-    if use_white_light:
+    if use_white_light and not is_delta_photons:
         sun_spec = sun_spec.copy()
         sun_spec[:, 1] = 1  # WHITE light
 
@@ -159,9 +162,14 @@ def manual_sce_fitting_tab(pos, gen, eqe, sun_spec, use_white_light, gen_wavelen
     weights = np.concatenate(([0.5*dp[0]], 0.5*(dp[:-1]+dp[1:]), [0.5*dp[-1]]))
     X = (gen / 1e21).T * weights
 
-    # Interpolate solar spectrum
+    # Interpolate spectrum/delta_photons onto target wavelengths
     interp_flux = interp1d(sun_spec[:, 0], sun_spec[:, 1], bounds_error=False, fill_value=0)
-    photon_flux = interp_flux(lam) / (h * c_nm / lam) / 1e18
+    if is_delta_photons:
+        # Delta photons file: values are already in photons/s/cm², just scale to 10^18
+        photon_flux = interp_flux(lam) / 1e18
+    else:
+        # Spectrum file: convert from W/m²/nm to 10^18 photons/s/cm²
+        photon_flux = interp_flux(lam) / (h * c_nm / lam) / 1e18
     y_measured = eqe_vals_interp * photon_flux
 
     # Settings section
