@@ -538,6 +538,29 @@ def compute_clipping_penalty(coef):
     return np.mean(upper_violation + lower_violation)
 
 
+def compute_oscillation_penalty(coef):
+    """Compute penalty for oscillations (direction changes) in the solution.
+
+    Counts the number of sign changes in the first derivative, which indicates
+    how many times the solution changes direction (peaks/valleys).
+
+    Parameters:
+    -----------
+    coef : array
+        Coefficient values (SCE profile)
+
+    Returns:
+    --------
+    n_oscillations : int
+        Number of direction changes (sign changes in derivative)
+    """
+    # Compute first derivative (differences)
+    diff = np.diff(coef)
+    # Count sign changes: where diff[i] * diff[i+1] < 0
+    sign_changes = np.sum(diff[:-1] * diff[1:] < 0)
+    return sign_changes
+
+
 def read_uploaded_data(eqe_file, gen_file, sun_file, x1, x2):
     """Load and process uploaded files or local file paths."""
     try:
@@ -936,6 +959,19 @@ else:
     use_clipping_penalty = False
     clipping_penalty_weight = 0.0
 
+# Row 5: Oscillation penalty
+col_osc_pen, col_osc_weight = st.columns([1, 1])
+with col_osc_pen:
+    use_oscillation_penalty = st.checkbox("Oscillation penalty", value=False,
+                                          help="Penalize solutions with many direction changes (peaks/valleys)")
+with col_osc_weight:
+    if use_oscillation_penalty:
+        oscillation_penalty_weight = st.number_input("Osc. penalty weight", value=1e-5, min_value=1e-8, max_value=1.0,
+                                                     step=1e-6, format="%.2e",
+                                                     help="Penalty per direction change. Start small (1e-5) and increase if needed.")
+    else:
+        oscillation_penalty_weight = 0.0
+
 # Batch mode option (only show when multiple EQE files selected)
 if len(eqe_file_list) > 1:
     use_same_alpha = st.checkbox(
@@ -1082,9 +1118,11 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                 mse = {}
                 mse_pure = {}
                 penalty_values = {}
+                oscillation_values = {}
                 # Compute MSE for this file at the shared alpha
                 fold_mse_list = []
                 fold_penalty_list = []
+                fold_oscillation_list = []
                 for tr, val in kf.split(X_weighted):
                     if use_clipping_penalty and use_clipping:
                         m = CustomRidgeDirect(alpha=shared_alpha, L=L, constraint=False, use_bounded=False)
@@ -1096,15 +1134,20 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                         fold_mse = mean_squared_error(y_weighted[val], y_val_pred)
                         fold_mse_list.append(fold_mse)
                         fold_penalty_list.append(clip_penalty)
+                        if use_oscillation_penalty:
+                            fold_oscillation_list.append(compute_oscillation_penalty(clipped_coef))
                     else:
                         m = CustomRidgeDirect(alpha=shared_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
                         m.fit(X_weighted[tr], y_weighted[tr])
                         y_val_pred = m.predict(X_weighted[val])
                         fold_mse_list.append(mean_squared_error(y_weighted[val], y_val_pred))
                         fold_penalty_list.append(0.0)
+                        if use_oscillation_penalty:
+                            fold_oscillation_list.append(compute_oscillation_penalty(m.coef_))
                 mse_pure[shared_alpha] = np.mean(fold_mse_list)
                 penalty_values[shared_alpha] = np.mean(fold_penalty_list)
-                mse[shared_alpha] = mse_pure[shared_alpha] + clipping_penalty_weight * penalty_values[shared_alpha]
+                oscillation_values[shared_alpha] = np.mean(fold_oscillation_list) if fold_oscillation_list else 0.0
+                mse[shared_alpha] = mse_pure[shared_alpha] + clipping_penalty_weight * penalty_values[shared_alpha] + oscillation_penalty_weight * oscillation_values[shared_alpha]
             else:
                 # Find optimal alpha for this file
                 if is_batch:
@@ -1115,9 +1158,12 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                 mse_pure = {}  # Pure MSE without penalty
                 penalty_values = {}  # Clipping penalty values
 
+                oscillation_values = {}  # Oscillation penalty values
+
                 for idx, a in enumerate(alphas):
                     fold_mse_list = []
                     fold_penalty_list = []
+                    fold_oscillation_list = []
                     for tr, val in kf.split(X_weighted):
                         if use_clipping_penalty and use_clipping:
                             # Fit without constraint to get unconstrained coefficients
@@ -1135,6 +1181,10 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                             fold_mse = mean_squared_error(y_weighted[val], y_val_pred)
                             fold_mse_list.append(fold_mse)
                             fold_penalty_list.append(clip_penalty)
+
+                            # Compute oscillation penalty on clipped coefficients
+                            if use_oscillation_penalty:
+                                fold_oscillation_list.append(compute_oscillation_penalty(clipped_coef))
                         else:
                             # Original behavior
                             m = CustomRidgeDirect(alpha=a, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
@@ -1143,9 +1193,14 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                             fold_mse_list.append(mean_squared_error(y_weighted[val], y_val_pred))
                             fold_penalty_list.append(0.0)
 
+                            # Compute oscillation penalty
+                            if use_oscillation_penalty:
+                                fold_oscillation_list.append(compute_oscillation_penalty(m.coef_))
+
                     mse_pure[a] = np.mean(fold_mse_list)
                     penalty_values[a] = np.mean(fold_penalty_list)
-                    mse[a] = mse_pure[a] + clipping_penalty_weight * penalty_values[a]
+                    oscillation_values[a] = np.mean(fold_oscillation_list) if fold_oscillation_list else 0.0
+                    mse[a] = mse_pure[a] + clipping_penalty_weight * penalty_values[a] + oscillation_penalty_weight * oscillation_values[a]
                     progress_bar.progress((idx + 1) / len(alphas))
 
                 best_alpha = min(mse, key=mse.get)
@@ -1174,6 +1229,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                 'mse': mse,
                 'mse_pure': mse_pure,
                 'penalty_values': penalty_values,
+                'oscillation_values': oscillation_values,
                 'best_alpha': best_alpha,
                 'alphas': alphas,
                 'eqe_original_wavelengths': eqe_original_wavelengths,
@@ -1204,6 +1260,8 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
     st.session_state.weight_factor_used = weight_factor
     st.session_state.use_clipping_penalty = use_clipping_penalty
     st.session_state.clipping_penalty_weight = clipping_penalty_weight
+    st.session_state.use_oscillation_penalty = use_oscillation_penalty
+    st.session_state.oscillation_penalty_weight = oscillation_penalty_weight
     # For backward compatibility with single file
     if not is_batch and batch_results:
         first_result = list(batch_results.values())[0]
@@ -1211,6 +1269,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
         st.session_state.mse = first_result['mse']
         st.session_state.mse_pure = first_result['mse_pure']
         st.session_state.penalty_values = first_result['penalty_values']
+        st.session_state.oscillation_values = first_result['oscillation_values']
         st.session_state.best_alpha = first_result['best_alpha']
         st.session_state.X = first_result['X']
         st.session_state.y = first_result['y']
