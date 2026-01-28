@@ -514,6 +514,30 @@ class CustomRidgeDirect(BaseEstimator, RegressorMixin):
         return X @ self.coef_
 
 
+def compute_clipping_penalty(coef):
+    """Compute penalty for coefficients that violate [0, 1] bounds.
+
+    Only penalizes the amount by which coefficients go *beyond* 0 or 1,
+    not coefficients that are exactly at the boundaries.
+
+    Parameters:
+    -----------
+    coef : array
+        Coefficient values (unconstrained or before clipping)
+
+    Returns:
+    --------
+    penalty : float
+        Mean squared violation per coefficient
+    """
+    # Violation above 1: how much coef exceeds 1
+    upper_violation = np.maximum(0, coef - 1) ** 2
+    # Violation below 0: how much coef goes negative
+    lower_violation = np.maximum(0, -coef) ** 2
+    # Mean penalty per coefficient (normalize by number of points)
+    return np.mean(upper_violation + lower_violation)
+
+
 def read_uploaded_data(eqe_file, gen_file, sun_file, x1, x2):
     """Load and process uploaded files or local file paths."""
     try:
@@ -864,7 +888,8 @@ with col_opt2:
 with col_opt3:
     use_bounded_opt = st.checkbox("Bounded opt", value=False, help="Use 0-1 constrained optimization (slower)")
 with col_opt4:
-    use_first_derivative = st.checkbox("1st deriv.", value=False, help="Use 1st derivative regularization")
+    use_second_derivative = st.checkbox("2nd deriv.", value=False, help="Use 2nd derivative regularization (curvature) instead of 1st (slope)")
+    use_first_derivative = not use_second_derivative  # Flip logic: default is 1st derivative
 with col_opt5:
     n_splits = st.selectbox("CV folds", [3, 4, 5, 6, 7, 8, 9, 10], index=2, help="Cross-validation folds")
 
@@ -894,6 +919,22 @@ with col_weight:
             weight_factor = st.number_input("Factor", value=10.0, min_value=1.0, max_value=1000000.0)
     else:
         weight_wl_min, weight_wl_max, weight_factor = None, None, None
+
+# Row 4: Clipping penalty (only relevant when Clip 0-1 is enabled)
+if use_clipping and not use_bounded_opt:
+    col_clip_pen, col_clip_weight = st.columns([1, 1])
+    with col_clip_pen:
+        use_clipping_penalty = st.checkbox("Clipping penalty", value=False,
+                                           help="Penalize solutions that need clipping (pushes CV toward higher α with more physical solutions)")
+    with col_clip_weight:
+        if use_clipping_penalty:
+            clipping_penalty_weight = st.number_input("Penalty weight", value=1.0, min_value=0.01, step=0.1, format="%.2f",
+                                                      help="Higher = stronger push toward solutions that stay within [0,1] naturally")
+        else:
+            clipping_penalty_weight = 0.0
+else:
+    use_clipping_penalty = False
+    clipping_penalty_weight = 0.0
 
 # Batch mode option (only show when multiple EQE files selected)
 if len(eqe_file_list) > 1:
@@ -1038,31 +1079,73 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
             if use_same_alpha and shared_alpha is not None:
                 # Use the shared alpha from first file
                 best_alpha = shared_alpha
-                mse = {shared_alpha: 0}  # Placeholder, will compute actual MSE
+                mse = {}
+                mse_pure = {}
+                penalty_values = {}
                 # Compute MSE for this file at the shared alpha
-                errs = []
+                fold_mse_list = []
+                fold_penalty_list = []
                 for tr, val in kf.split(X_weighted):
-                    m = CustomRidgeDirect(alpha=shared_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
-                    m.fit(X_weighted[tr], y_weighted[tr])
-                    y_val_pred = m.predict(X_weighted[val])
-                    errs.append(mean_squared_error(y_weighted[val], y_val_pred))
-                mse[shared_alpha] = np.mean(errs)
+                    if use_clipping_penalty and use_clipping:
+                        m = CustomRidgeDirect(alpha=shared_alpha, L=L, constraint=False, use_bounded=False)
+                        m.fit(X_weighted[tr], y_weighted[tr])
+                        unconstrained_coef = m.coef_.copy()
+                        clip_penalty = compute_clipping_penalty(unconstrained_coef)
+                        clipped_coef = np.clip(unconstrained_coef, 0, 1)
+                        y_val_pred = X_weighted[val] @ clipped_coef
+                        fold_mse = mean_squared_error(y_weighted[val], y_val_pred)
+                        fold_mse_list.append(fold_mse)
+                        fold_penalty_list.append(clip_penalty)
+                    else:
+                        m = CustomRidgeDirect(alpha=shared_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
+                        m.fit(X_weighted[tr], y_weighted[tr])
+                        y_val_pred = m.predict(X_weighted[val])
+                        fold_mse_list.append(mean_squared_error(y_weighted[val], y_val_pred))
+                        fold_penalty_list.append(0.0)
+                mse_pure[shared_alpha] = np.mean(fold_mse_list)
+                penalty_values[shared_alpha] = np.mean(fold_penalty_list)
+                mse[shared_alpha] = mse_pure[shared_alpha] + clipping_penalty_weight * penalty_values[shared_alpha]
             else:
                 # Find optimal alpha for this file
                 if is_batch:
                     progress_text = st.empty()
                     progress_text.text(f"Finding optimal α for {file_name}...")
                 progress_bar = st.progress(0)
-                mse = {}
+                mse = {}  # Combined score (MSE + penalty) or just MSE if no penalty
+                mse_pure = {}  # Pure MSE without penalty
+                penalty_values = {}  # Clipping penalty values
 
                 for idx, a in enumerate(alphas):
-                    errs = []
+                    fold_mse_list = []
+                    fold_penalty_list = []
                     for tr, val in kf.split(X_weighted):
-                        m = CustomRidgeDirect(alpha=a, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
-                        m.fit(X_weighted[tr], y_weighted[tr])
-                        y_val_pred = m.predict(X_weighted[val])
-                        errs.append(mean_squared_error(y_weighted[val], y_val_pred))
-                    mse[a] = np.mean(errs)
+                        if use_clipping_penalty and use_clipping:
+                            # Fit without constraint to get unconstrained coefficients
+                            m = CustomRidgeDirect(alpha=a, L=L, constraint=False, use_bounded=False)
+                            m.fit(X_weighted[tr], y_weighted[tr])
+                            unconstrained_coef = m.coef_.copy()
+
+                            # Compute clipping penalty (only on violations, not boundary values)
+                            clip_penalty = compute_clipping_penalty(unconstrained_coef)
+
+                            # Clip for prediction (same behavior as before)
+                            clipped_coef = np.clip(unconstrained_coef, 0, 1)
+                            y_val_pred = X_weighted[val] @ clipped_coef
+
+                            fold_mse = mean_squared_error(y_weighted[val], y_val_pred)
+                            fold_mse_list.append(fold_mse)
+                            fold_penalty_list.append(clip_penalty)
+                        else:
+                            # Original behavior
+                            m = CustomRidgeDirect(alpha=a, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
+                            m.fit(X_weighted[tr], y_weighted[tr])
+                            y_val_pred = m.predict(X_weighted[val])
+                            fold_mse_list.append(mean_squared_error(y_weighted[val], y_val_pred))
+                            fold_penalty_list.append(0.0)
+
+                    mse_pure[a] = np.mean(fold_mse_list)
+                    penalty_values[a] = np.mean(fold_penalty_list)
+                    mse[a] = mse_pure[a] + clipping_penalty_weight * penalty_values[a]
                     progress_bar.progress((idx + 1) / len(alphas))
 
                 best_alpha = min(mse, key=mse.get)
@@ -1089,6 +1172,8 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                 'y_weighted': y_weighted,
                 'sample_weights': sample_weights,
                 'mse': mse,
+                'mse_pure': mse_pure,
+                'penalty_values': penalty_values,
                 'best_alpha': best_alpha,
                 'alphas': alphas,
                 'eqe_original_wavelengths': eqe_original_wavelengths,
@@ -1097,7 +1182,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
 
             if not is_batch:
                 weight_str = f" (weighted: {weight_wl_min}-{weight_wl_max} nm, {weight_factor}×)" if weight_factor is not None else ""
-                st.success(f"Optimal alpha: **{best_alpha:.2e}** (MSE: {mse[best_alpha]:.2e}){weight_str}")
+                st.success(f"Optimal alpha: **{best_alpha:.2e}** (CV score: {mse[best_alpha]:.2e}){weight_str}")
 
     # Store batch results in session state
     st.session_state.analysis_complete = True
@@ -1117,11 +1202,15 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
     st.session_state.weight_wl_min_used = weight_wl_min
     st.session_state.weight_wl_max_used = weight_wl_max
     st.session_state.weight_factor_used = weight_factor
+    st.session_state.use_clipping_penalty = use_clipping_penalty
+    st.session_state.clipping_penalty_weight = clipping_penalty_weight
     # For backward compatibility with single file
     if not is_batch and batch_results:
         first_result = list(batch_results.values())[0]
         st.session_state.alphas = first_result['alphas']
         st.session_state.mse = first_result['mse']
+        st.session_state.mse_pure = first_result['mse_pure']
+        st.session_state.penalty_values = first_result['penalty_values']
         st.session_state.best_alpha = first_result['best_alpha']
         st.session_state.X = first_result['X']
         st.session_state.y = first_result['y']
@@ -1236,6 +1325,10 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # CV comparison plot
         st.subheader("Cross-Validation Comparison")
 
+        # Check if clipping penalty was used
+        use_clipping_penalty_batch = st.session_state.get('use_clipping_penalty', False)
+        clipping_penalty_weight_batch = st.session_state.get('clipping_penalty_weight', 0.0)
+
         fig_cv = go.Figure()
         colors = ['darkblue', 'darkgreen', 'darkred', 'purple', 'orange', 'brown', 'pink', 'gray']
 
@@ -1243,20 +1336,45 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             color = colors[idx % len(colors)]
             file_alphas = result['alphas']
             mse = result['mse']
+            mse_pure = result.get('mse_pure', mse)  # Fall back to mse if mse_pure not available
             best_alpha = result['best_alpha']
 
-            # MSE curve
-            mse_values = [mse[a] for a in file_alphas if a in mse]
             alphas_plot = [a for a in file_alphas if a in mse]
 
-            fig_cv.add_trace(go.Scatter(
-                x=alphas_plot,
-                y=mse_values,
-                mode='lines',
-                name=file_name,
-                line=dict(color=color, width=2),
-                hovertemplate=f'{file_name}<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
-            ))
+            # If clipping penalty was used, show both curves
+            if use_clipping_penalty_batch and mse_pure != mse:
+                # Pure MSE curve (dashed)
+                mse_pure_values = [mse_pure[a] for a in alphas_plot]
+                fig_cv.add_trace(go.Scatter(
+                    x=alphas_plot,
+                    y=mse_pure_values,
+                    mode='lines',
+                    name=f'{file_name} (pure MSE)',
+                    line=dict(color=color, width=1, dash='dash'),
+                    hovertemplate=f'{file_name}<br>α: %{{x:.2e}}<br>Pure MSE: %{{y:.2e}}<extra></extra>'
+                ))
+
+                # Combined score curve (solid)
+                mse_combined_values = [mse[a] for a in alphas_plot]
+                fig_cv.add_trace(go.Scatter(
+                    x=alphas_plot,
+                    y=mse_combined_values,
+                    mode='lines',
+                    name=f'{file_name} (CV score)',
+                    line=dict(color=color, width=2),
+                    hovertemplate=f'{file_name}<br>α: %{{x:.2e}}<br>CV Score: %{{y:.2e}}<extra></extra>'
+                ))
+            else:
+                # Single MSE curve
+                mse_values = [mse[a] for a in alphas_plot]
+                fig_cv.add_trace(go.Scatter(
+                    x=alphas_plot,
+                    y=mse_values,
+                    mode='lines',
+                    name=file_name,
+                    line=dict(color=color, width=2),
+                    hovertemplate=f'{file_name}<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
+                ))
 
             # Optimal point marker (only show if not using same alpha with different current)
             if not use_same_alpha_mode or current_alpha is None:
@@ -1267,7 +1385,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     name=f'{file_name} optimal',
                     marker=dict(color=color, size=10, symbol='star'),
                     showlegend=False,
-                    hovertemplate=f'{file_name} optimal<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
+                    hovertemplate=f'{file_name} optimal<br>α: %{{x:.2e}}<br>CV Score: %{{y:.2e}}<extra></extra>'
                 ))
 
         # Add current alpha vertical line if using same alpha mode
@@ -1279,15 +1397,22 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 fig_cv.add_vline(x=shared_alpha, line_dash="dot", line_color="gray",
                                 annotation_text=f"Optimal α = {shared_alpha:.2e}")
 
+        # Update title based on options used
+        title_parts = ['Cross-Validation: MSE vs Alpha']
+        if use_clipping_penalty_batch:
+            title_parts.append(f'Clipping Penalty (w={clipping_penalty_weight_batch:.1f})')
+        plot_title = title_parts[0] + (' (' + ', '.join(title_parts[1:]) + ')' if len(title_parts) > 1 else '')
+        yaxis_title = 'CV Score / MSE' if use_clipping_penalty_batch else 'Average MSE'
+
         fig_cv.update_layout(
-            title=dict(text='Cross-Validation: MSE vs Alpha', font=dict(size=16, family='Arial Black')),
+            title=dict(text=plot_title, font=dict(size=16, family='Arial Black')),
             xaxis=dict(title='Alpha', type='log', gridcolor='lightgray'),
-            yaxis=dict(title='Average MSE', type='log', gridcolor='lightgray'),
+            yaxis=dict(title=yaxis_title, type='log', gridcolor='lightgray'),
             template='plotly_white',
             hovermode='closest',
             height=500,
             showlegend=True,
-            legend=dict(x=0.02, y=0.98)
+            legend=dict(x=0.98, y=0.98, xanchor='right', yanchor='top')
         )
 
         st.plotly_chart(fig_cv, use_container_width=True)
@@ -1501,6 +1626,10 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # Retrieve from session state
         alphas = st.session_state.alphas
         mse = st.session_state.mse
+        mse_pure = st.session_state.get('mse_pure', mse)  # Fallback to mse if not available
+        penalty_values = st.session_state.get('penalty_values', {a: 0 for a in alphas})
+        use_clipping_penalty_stored = st.session_state.get('use_clipping_penalty', False)
+        clipping_penalty_weight_stored = st.session_state.get('clipping_penalty_weight', 0.0)
         best_alpha = st.session_state.best_alpha
         X = st.session_state.X
         y = st.session_state.y
@@ -1536,30 +1665,54 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
 
         current_alpha = 10**log_current_alpha
 
-        # Display current alpha info
+        # Display current alpha info - adjust columns based on what's enabled
+        n_cols = 3
         if weight_factor_stored is not None:
-            col_info1, col_info2, col_info3, col_info4 = st.columns(4)
-        else:
-            col_info1, col_info2, col_info3 = st.columns(3)
-        col_info1.metric("Current α", f"{current_alpha:.2e}")
-        col_info2.metric("Optimal α", f"{best_alpha:.2e}")
+            n_cols += 1
+        if use_clipping_penalty_stored:
+            n_cols += 1
 
-        # Find MSE for current alpha (interpolate if necessary)
+        info_cols = st.columns(n_cols)
+        col_idx = 0
+
+        info_cols[col_idx].metric("Current α", f"{current_alpha:.2e}")
+        col_idx += 1
+        info_cols[col_idx].metric("Optimal α", f"{best_alpha:.2e}")
+        col_idx += 1
+
+        # Find MSE/score for current alpha (interpolate if necessary)
         if current_alpha in mse:
             current_mse = mse[current_alpha]
+            current_pure_mse = mse_pure.get(current_alpha, current_mse)
+            current_penalty = penalty_values.get(current_alpha, 0)
         else:
-            # Interpolate MSE
+            # Interpolate
             log_alphas_array = np.log10(alphas)
             mse_array = np.array([mse[a] for a in alphas])
             current_mse = 10**np.interp(log_current_alpha, log_alphas_array, np.log10(mse_array))
+            mse_pure_array = np.array([mse_pure.get(a, mse[a]) for a in alphas])
+            current_pure_mse = 10**np.interp(log_current_alpha, log_alphas_array, np.log10(mse_pure_array))
+            penalty_array = np.array([penalty_values.get(a, 0) for a in alphas])
+            current_penalty = np.interp(log_current_alpha, log_alphas_array, penalty_array)
 
-        col_info3.metric("Current MSE", f"{current_mse:.2e}",
-                        delta=f"{((current_mse/mse[best_alpha] - 1)*100):.1f}%",
-                        delta_color="inverse")
+        if use_clipping_penalty_stored:
+            # Show pure MSE
+            info_cols[col_idx].metric("Pure MSE", f"{current_pure_mse:.2e}")
+            col_idx += 1
+            # Show CV Score (combined)
+            info_cols[col_idx].metric("CV Score", f"{current_mse:.2e}",
+                            delta=f"penalty: {current_penalty:.2e}",
+                            delta_color="off")
+            col_idx += 1
+        else:
+            info_cols[col_idx].metric("Current MSE", f"{current_mse:.2e}",
+                            delta=f"{((current_mse/mse[best_alpha] - 1)*100):.1f}%",
+                            delta_color="inverse")
+            col_idx += 1
 
         # Show weighted fitting info if it was used
         if weight_factor_stored is not None:
-            col_info4.metric("Weight", f"{weight_wl_min_stored}-{weight_wl_max_stored} nm ({weight_factor_stored}×)")
+            info_cols[col_idx].metric("Weight", f"{weight_wl_min_stored}-{weight_wl_max_stored} nm ({weight_factor_stored}×)")
 
         # Fit model with current alpha (use weighted data for fitting, unweighted for prediction/display)
         model_current = CustomRidgeDirect(alpha=current_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
@@ -1571,35 +1724,91 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         model_optimal = CustomRidgeDirect(alpha=best_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
         model_optimal.fit(X_weighted, y_weighted)
         y_fit_optimal = model_optimal.predict(X)  # Predict on unweighted X for display
+        sce_optimal = model_optimal.coef_
 
         # Plot CV curve
         col1, col2 = st.columns(2)
 
         with col1:
             # Create interactive CV plot with Plotly
-            mse_values = [mse[a] for a in alphas]
-
             fig1 = go.Figure()
 
-            # Main curve
-            fig1.add_trace(go.Scatter(
-                x=alphas,
-                y=mse_values,
-                mode='lines',
-                name='MSE',
-                line=dict(color='royalblue', width=2),
-                hovertemplate='Alpha: %{x:.2e}<br>MSE: %{y:.2e}<extra></extra>'
-            ))
+            if use_clipping_penalty_stored and mse_pure != mse:
+                # Show both pure MSE and combined score
+                mse_pure_values = [mse_pure[a] for a in alphas]
+                mse_combined_values = [mse[a] for a in alphas]
 
-            # Optimal point
-            fig1.add_trace(go.Scatter(
-                x=[best_alpha],
-                y=[mse[best_alpha]],
-                mode='markers',
-                name='Optimal α',
-                marker=dict(color='red', size=12, symbol='star'),
-                hovertemplate='Optimal α: %{x:.2e}<br>MSE: %{y:.2e}<extra></extra>'
-            ))
+                # Pure MSE curve (dashed)
+                fig1.add_trace(go.Scatter(
+                    x=alphas,
+                    y=mse_pure_values,
+                    mode='lines',
+                    name='Pure MSE',
+                    line=dict(color='gray', width=2, dash='dash'),
+                    hovertemplate='Alpha: %{x:.2e}<br>Pure MSE: %{y:.2e}<extra></extra>'
+                ))
+
+                # Combined score curve (solid)
+                fig1.add_trace(go.Scatter(
+                    x=alphas,
+                    y=mse_combined_values,
+                    mode='lines',
+                    name=f'CV Score (MSE + {clipping_penalty_weight_stored:.1f}×penalty)',
+                    line=dict(color='royalblue', width=2),
+                    hovertemplate='Alpha: %{x:.2e}<br>CV Score: %{y:.2e}<extra></extra>'
+                ))
+
+                # Find optimal based on pure MSE for comparison
+                best_alpha_pure_mse = min(mse_pure, key=mse_pure.get)
+
+                # Optimal point (based on combined score)
+                fig1.add_trace(go.Scatter(
+                    x=[best_alpha],
+                    y=[mse[best_alpha]],
+                    mode='markers',
+                    name='Optimal α (penalized)',
+                    marker=dict(color='red', size=12, symbol='star'),
+                    hovertemplate='Optimal α: %{x:.2e}<br>CV Score: %{y:.2e}<extra></extra>'
+                ))
+
+                # Show where pure MSE would have chosen (if different)
+                if abs(best_alpha_pure_mse - best_alpha) / best_alpha > 0.1:
+                    fig1.add_trace(go.Scatter(
+                        x=[best_alpha_pure_mse],
+                        y=[mse_pure[best_alpha_pure_mse]],
+                        mode='markers',
+                        name='Would-be optimal (no penalty)',
+                        marker=dict(color='gray', size=10, symbol='star-open'),
+                        hovertemplate='Pure MSE optimal α: %{x:.2e}<br>Pure MSE: %{y:.2e}<extra></extra>'
+                    ))
+
+                plot_title = 'Cross-Validation: MSE vs Alpha (with Clipping Penalty)'
+                yaxis_title = 'CV Score / MSE'
+            else:
+                # Standard single curve
+                mse_values = [mse[a] for a in alphas]
+
+                fig1.add_trace(go.Scatter(
+                    x=alphas,
+                    y=mse_values,
+                    mode='lines',
+                    name='CV Score',
+                    line=dict(color='royalblue', width=2),
+                    hovertemplate='Alpha: %{x:.2e}<br>CV Score: %{y:.2e}<extra></extra>'
+                ))
+
+                # Optimal point
+                fig1.add_trace(go.Scatter(
+                    x=[best_alpha],
+                    y=[mse[best_alpha]],
+                    mode='markers',
+                    name='Optimal α',
+                    marker=dict(color='red', size=12, symbol='star'),
+                    hovertemplate='Optimal α: %{x:.2e}<br>CV Score: %{y:.2e}<extra></extra>'
+                ))
+
+                plot_title = 'Cross-Validation: MSE vs Alpha'
+                yaxis_title = 'Average CV Score'
 
             # Current alpha point (only if different from optimal)
             if abs(current_alpha - best_alpha) / best_alpha > 0.01:  # Show if >1% different
@@ -1609,18 +1818,18 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     mode='markers',
                     name='Current α',
                     marker=dict(color='orange', size=12, symbol='diamond'),
-                    hovertemplate='Current α: %{x:.2e}<br>MSE: %{y:.2e}<extra></extra>'
+                    hovertemplate='Current α: %{x:.2e}<br>Score: %{y:.2e}<extra></extra>'
                 ))
 
             fig1.update_layout(
-                title=dict(text='Cross-Validation: MSE vs Alpha', font=dict(size=16, family='Arial Black')),
+                title=dict(text=plot_title, font=dict(size=16, family='Arial Black')),
                 xaxis=dict(title='Alpha', type='log', gridcolor='lightgray'),
-                yaxis=dict(title='Average MSE', type='log', gridcolor='lightgray'),
+                yaxis=dict(title=yaxis_title, type='log', gridcolor='lightgray'),
                 template='plotly_white',
                 hovermode='closest',
                 height=500,
                 showlegend=True,
-                legend=dict(x=0.02, y=0.98)
+                legend=dict(x=0.98, y=0.98, xanchor='right', yanchor='top')
             )
 
             st.plotly_chart(fig1, use_container_width=True)
@@ -1704,12 +1913,23 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             # Create interactive SCE profile plot with Plotly
             fig3 = go.Figure()
 
+            # Optimal alpha profile (grey, shown when different from current)
+            if abs(current_alpha - best_alpha) / best_alpha > 0.01:
+                fig3.add_trace(go.Scatter(
+                    x=pos,
+                    y=sce_optimal,
+                    mode='lines',
+                    name=f'Optimal α={best_alpha:.1e}',
+                    line=dict(color='gray', width=2),
+                    hovertemplate='Depth: %{x:.1f} nm<br>SCE (optimal): %{y:.4f}<extra></extra>'
+                ))
+
             # Current alpha profile (solid line)
             fig3.add_trace(go.Scatter(
                 x=pos,
                 y=sce_current,
                 mode='lines',
-                name='Current α SCE',
+                name=f'Current α={current_alpha:.1e}',
                 line=dict(color='darkblue', width=3),
                 hovertemplate='Depth: %{x:.1f} nm<br>SCE (current): %{y:.4f}<extra></extra>'
             ))
@@ -1722,7 +1942,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 hovermode='x unified',
                 height=600,
                 showlegend=True,
-                legend=dict(x=0.02, y=0.02, xanchor='left', yanchor='bottom')
+                legend=dict(x=0.98, y=0.02, xanchor='right', yanchor='bottom')
             )
 
             st.plotly_chart(fig3, use_container_width=True)
