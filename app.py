@@ -538,27 +538,31 @@ def compute_clipping_penalty(coef):
     return np.mean(upper_violation + lower_violation)
 
 
-def compute_oscillation_penalty(coef):
+def compute_oscillation_penalty(coef, threshold=0):
     """Compute penalty for oscillations (direction changes) in the solution.
 
     Counts the number of sign changes in the first derivative, which indicates
     how many times the solution changes direction (peaks/valleys).
+    Only penalizes oscillations beyond the threshold.
 
     Parameters:
     -----------
     coef : array
         Coefficient values (SCE profile)
+    threshold : int
+        Number of direction changes allowed before penalizing (default: 0)
 
     Returns:
     --------
-    n_oscillations : int
-        Number of direction changes (sign changes in derivative)
+    excess_oscillations : int
+        Number of direction changes beyond the threshold (0 if below threshold)
     """
     # Compute first derivative (differences)
     diff = np.diff(coef)
     # Count sign changes: where diff[i] * diff[i+1] < 0
     sign_changes = np.sum(diff[:-1] * diff[1:] < 0)
-    return sign_changes
+    # Only penalize oscillations beyond threshold
+    return max(0, sign_changes - threshold)
 
 
 def read_uploaded_data(eqe_file, gen_file, sun_file, x1, x2):
@@ -960,15 +964,21 @@ else:
     clipping_penalty_weight = 0.0
 
 # Row 5: Oscillation penalty
-col_osc_pen, col_osc_weight = st.columns([1, 1])
+col_osc_pen, col_osc_thresh, col_osc_weight = st.columns([1, 1, 1])
 with col_osc_pen:
     use_oscillation_penalty = st.checkbox("Oscillation penalty", value=False,
                                           help="Penalize solutions with many direction changes (peaks/valleys)")
+with col_osc_thresh:
+    if use_oscillation_penalty:
+        oscillation_threshold = st.number_input("Allowed oscillations", value=4, min_value=0, max_value=20,
+                                                help="Number of direction changes allowed before penalizing (e.g., 4 allows low-high-low-high-low)")
+    else:
+        oscillation_threshold = 0
 with col_osc_weight:
     if use_oscillation_penalty:
         oscillation_penalty_weight = st.number_input("Osc. penalty weight", value=1e-5, min_value=1e-8, max_value=1.0,
                                                      step=1e-6, format="%.2e",
-                                                     help="Penalty per direction change. Start small (1e-5) and increase if needed.")
+                                                     help="Penalty per excess direction change beyond threshold.")
     else:
         oscillation_penalty_weight = 0.0
 
@@ -1135,7 +1145,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                         fold_mse_list.append(fold_mse)
                         fold_penalty_list.append(clip_penalty)
                         if use_oscillation_penalty:
-                            fold_oscillation_list.append(compute_oscillation_penalty(clipped_coef))
+                            fold_oscillation_list.append(compute_oscillation_penalty(clipped_coef, oscillation_threshold))
                     else:
                         m = CustomRidgeDirect(alpha=shared_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
                         m.fit(X_weighted[tr], y_weighted[tr])
@@ -1143,7 +1153,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                         fold_mse_list.append(mean_squared_error(y_weighted[val], y_val_pred))
                         fold_penalty_list.append(0.0)
                         if use_oscillation_penalty:
-                            fold_oscillation_list.append(compute_oscillation_penalty(m.coef_))
+                            fold_oscillation_list.append(compute_oscillation_penalty(m.coef_, oscillation_threshold))
                 mse_pure[shared_alpha] = np.mean(fold_mse_list)
                 penalty_values[shared_alpha] = np.mean(fold_penalty_list)
                 oscillation_values[shared_alpha] = np.mean(fold_oscillation_list) if fold_oscillation_list else 0.0
@@ -1184,7 +1194,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
 
                             # Compute oscillation penalty on clipped coefficients
                             if use_oscillation_penalty:
-                                fold_oscillation_list.append(compute_oscillation_penalty(clipped_coef))
+                                fold_oscillation_list.append(compute_oscillation_penalty(clipped_coef, oscillation_threshold))
                         else:
                             # Original behavior
                             m = CustomRidgeDirect(alpha=a, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
@@ -1195,7 +1205,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
 
                             # Compute oscillation penalty
                             if use_oscillation_penalty:
-                                fold_oscillation_list.append(compute_oscillation_penalty(m.coef_))
+                                fold_oscillation_list.append(compute_oscillation_penalty(m.coef_, oscillation_threshold))
 
                     mse_pure[a] = np.mean(fold_mse_list)
                     penalty_values[a] = np.mean(fold_penalty_list)
