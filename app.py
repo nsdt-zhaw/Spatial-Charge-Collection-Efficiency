@@ -56,7 +56,7 @@ def load_file_data(file_source):
         return file_source
 
 def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_optimal,
-                       sce_current, sce_mean, sce_std, current_alpha, best_alpha,
+                       sce_current, current_alpha, best_alpha,
                        eqe_original_wavelengths, eqe_original_values, gen_filtered,
                        settings_info):
     """Create an in-memory ZIP file containing all analysis results.
@@ -108,14 +108,7 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
                    header=f'pos(nm)\tSCE (alpha={current_alpha:.2e})')
         zf.writestr('sce_current.txt', sce_current_buffer.getvalue())
 
-        # 7. SCE optimal alpha with uncertainty (position, sce_mean, sce_std)
-        sce_optimal_data = np.column_stack((pos, sce_mean, sce_std))
-        sce_optimal_buffer = io.StringIO()
-        np.savetxt(sce_optimal_buffer, sce_optimal_data, fmt='%.6f\t%.6f\t%.6f',
-                   header=f'pos(nm)\tSCE_mean\tSCE_std (optimal alpha={best_alpha:.2e})')
-        zf.writestr('sce_optimal.txt', sce_optimal_buffer.getvalue())
-
-        # 8. Generation analysis (position, total_gen, collected_gen, cumulative_jsc)
+        # 7. Generation analysis (position, total_gen, collected_gen, cumulative_jsc)
         total_generation = trapz_func(gen_filtered, lam, axis=1)
         collected_generation = sce_current * total_generation
 
@@ -524,6 +517,14 @@ class CustomRidgeDirect(BaseEstimator, RegressorMixin):
 def read_uploaded_data(eqe_file, gen_file, sun_file, x1, x2):
     """Load and process uploaded files or local file paths."""
     try:
+        # Reset file position for uploaded files before reading
+        if hasattr(eqe_file, 'seek'):
+            eqe_file.seek(0)
+        if hasattr(gen_file, 'seek'):
+            gen_file.seek(0)
+        if hasattr(sun_file, 'seek'):
+            sun_file.seek(0)
+
         # Handle both file paths (strings) and uploaded file objects
         # np.loadtxt can handle both directly
         abs_data = np.loadtxt(gen_file)
@@ -592,8 +593,14 @@ def read_uploaded_data(eqe_file, gen_file, sun_file, x1, x2):
         unique_mask = np.concatenate(([True], pos[1:] != pos[:-1]))
         pos, gen = pos[unique_mask], gen[unique_mask]
 
-        eqe = np.loadtxt(eqe_file)
-        sun_spec = np.loadtxt(sun_file)
+        # Reset file position for uploaded files before reading
+        if hasattr(eqe_file, 'seek'):
+            eqe_file.seek(0)
+        if hasattr(sun_file, 'seek'):
+            sun_file.seek(0)
+
+        eqe = np.loadtxt(eqe_file, ndmin=2)
+        sun_spec = np.loadtxt(sun_file, ndmin=2)
         return pos, gen, eqe, sun_spec, gen_wavelengths
     except Exception as e:
         st.error(f"Error reading data: {str(e)}")
@@ -835,164 +842,68 @@ if TMM_AVAILABLE:
 st.markdown("---")
 st.header("⚙️ Settings")
 
-col_param1, col_param2, col_param3 = st.columns(3)
+# Row 1: Boundaries and regularization range
+col1, col2, col3, col4, col5 = st.columns(5)
+with col1:
+    x1 = st.number_input("x1 (nm)", value=10, min_value=0, help="Front CTL boundary")
+with col2:
+    x2 = st.number_input("x2 (nm)", value=550, min_value=0, help="Back CTL boundary")
+with col3:
+    alpha_min = st.number_input("log₁₀(α) min", value=0, help="Min regularization strength")
+with col4:
+    alpha_max = st.number_input("log₁₀(α) max", value=14, help="Max regularization strength")
+with col5:
+    n_alphas = st.number_input("# alphas", value=1000, min_value=100, max_value=2000, help="Alpha values to test")
 
-with col_param1:
-    st.subheader("Boundaries")
-    x1 = st.number_input(
-        "CTL boundary x1 (nm)",
-        value=10,
-        min_value=0,
-        help="Starting position of the active layer (nm). Defines the front charge transport layer (CTL) boundary. "
-             "SCE will be extracted between x1 and x2."
-    )
-    x2 = st.number_input(
-        "CTL boundary x2 (nm)",
-        value=550,
-        min_value=0,
-        help="End position of the active layer (nm). Defines the back charge transport layer (CTL) boundary. "
-             "SCE will be extracted between x1 and x2."
-    )
+# Row 2: Processing options
+col_opt1, col_opt2, col_opt3, col_opt4, col_opt5 = st.columns(5)
+with col_opt1:
+    use_white = st.checkbox("White light", value=True, help="Override with flat spectrum (enable for white light generation profiles)")
+with col_opt2:
+    use_clipping = st.checkbox("Clip 0-1", value=True, help="Constrain SCE to 0-1 range")
+with col_opt3:
+    use_bounded_opt = st.checkbox("Bounded opt", value=False, help="Use 0-1 constrained optimization (slower)")
+with col_opt4:
+    use_first_derivative = st.checkbox("1st deriv.", value=False, help="Use 1st derivative regularization")
+with col_opt5:
+    n_splits = st.selectbox("CV folds", [3, 4, 5, 6, 7, 8, 9, 10], index=2, help="Cross-validation folds")
 
-with col_param2:
-    st.subheader("Processing options")
-    use_white = st.checkbox(
-        "Use white light spectrum",
-        value=True,
-        help="Enable this when your generation profile was calculated with flat/white light illumination. "
-             "Sets constant irradiance at all wavelengths (note: photon flux will increase with wavelength). "
-             "Disable to use the default AM1.5G or uploaded spectrum."
-    )
-    use_clipping = st.checkbox(
-        "Apply 0-1 clipping to SCE",
-        value=True,
-        help="Constrains the extracted collection efficiency to physically meaningful values between 0 and 1. "
-             "Uses post-processing clipping after solving."
-    )
-    use_bounded_opt = st.checkbox(
-        "Use bounded optimization (0-1)",
-        value=False,
-        help="Solve the optimization problem directly with 0-1 bounds using constrained least squares. "
-             "More rigorous than clipping, but may be slower. When enabled, overrides the clipping option."
-    )
-    use_first_derivative = st.checkbox(
-        "Use 1st derivative regularization",
-        value=False,
-        help="Use first derivative (gradient penalty) for regularization instead of second derivative (smoothness penalty). "
-             "First derivative penalizes slope, second derivative penalizes curvature. "
-             "Second derivative is typically smoother but first derivative may preserve sharp features better."
-    )
-    n_splits = st.slider(
-        "Cross-validation folds",
-        3, 10, 5,
-        help="Number of data splits for K-fold cross-validation when finding optimal α. "
-             "More folds = more robust validation but longer computation. "
-             "5 folds is standard practice."
-    )
+# Row 3: Optional features
+col_filt, col_weight = st.columns(2)
 
-    # Batch mode alpha option (only show when multiple EQE files selected)
-    if len(eqe_file_list) > 1:
-        st.markdown("---")
-        st.markdown("**Batch fitting options:**")
-        use_same_alpha = st.checkbox(
-            "Use same α for all files",
-            value=False,
-            help="When enabled, finds optimal α from the first EQE file and applies it to all others. "
-                 "Faster and useful for comparing samples under identical conditions. "
-                 "When disabled, finds optimal α independently for each file."
-        )
-    else:
-        use_same_alpha = False
-
-    use_wavelength_filter = st.checkbox(
-        "Restrict wavelength range",
-        value=False,
-        help="Enable to limit the analysis to a specific wavelength range. "
-             "Useful for excluding regions with poor EQE or generation data quality."
-    )
-
+with col_filt:
+    use_wavelength_filter = st.checkbox("Restrict λ range", value=False, help="Limit analysis to wavelength range")
     if use_wavelength_filter:
-        wl_col1, wl_col2 = st.columns(2)
-        with wl_col1:
-            wl_min = st.number_input(
-                "λ min (nm)",
-                value=400,
-                min_value=300,
-                max_value=1200,
-                help="Minimum wavelength to include in analysis"
-            )
-        with wl_col2:
-            wl_max = st.number_input(
-                "λ max (nm)",
-                value=800,
-                min_value=300,
-                max_value=1200,
-                help="Maximum wavelength to include in analysis"
-            )
+        wl_c1, wl_c2 = st.columns(2)
+        with wl_c1:
+            wl_min = st.number_input("λ min", value=400, min_value=300, max_value=1200)
+        with wl_c2:
+            wl_max = st.number_input("λ max", value=800, min_value=300, max_value=1200)
     else:
         wl_min, wl_max = None, None
 
-    use_weighted_fitting = st.checkbox(
-        "Use weighted fitting",
-        value=False,
-        help="Give higher importance to a specific wavelength region during fitting. "
-             "The fit will prioritize matching EQE in the weighted region, potentially "
-             "at the expense of fit quality elsewhere."
-    )
-
+with col_weight:
+    use_weighted_fitting = st.checkbox("Weighted fitting", value=False, help="Prioritize a wavelength region")
     if use_weighted_fitting:
-        weight_col1, weight_col2, weight_col3 = st.columns(3)
-        with weight_col1:
-            weight_wl_min = st.number_input(
-                "Weight λ min (nm)",
-                value=430,
-                min_value=300,
-                max_value=1200,
-                help="Start of wavelength region to prioritize"
-            )
-        with weight_col2:
-            weight_wl_max = st.number_input(
-                "Weight λ max (nm)",
-                value=445,
-                min_value=300,
-                max_value=1200,
-                help="End of wavelength region to prioritize"
-            )
-        with weight_col3:
-            weight_factor = st.number_input(
-                "Weight factor",
-                value=10.0,
-                min_value=1.0,
-                max_value=1000000.0,
-                step=1.0,
-                help="How much more important the selected region is (e.g., 10 = 10× weight)"
-            )
+        w_c1, w_c2, w_c3 = st.columns(3)
+        with w_c1:
+            weight_wl_min = st.number_input("Weight λ min", value=430, min_value=300, max_value=1200)
+        with w_c2:
+            weight_wl_max = st.number_input("Weight λ max", value=445, min_value=300, max_value=1200)
+        with w_c3:
+            weight_factor = st.number_input("Factor", value=10.0, min_value=1.0, max_value=1000000.0)
     else:
         weight_wl_min, weight_wl_max, weight_factor = None, None, None
 
-with col_param3:
-    st.subheader("Regularization range")
-    alpha_min = st.number_input(
-        "Alpha range (log10 min)",
-        value=0,
-        help="Minimum regularization strength (log10 scale). "
-             "Smaller α values allow fitting closer to data but may produce noisy SCE profiles. "
-             "Start of the search range for optimal α."
+# Batch mode option (only show when multiple EQE files selected)
+if len(eqe_file_list) > 1:
+    use_same_alpha = st.checkbox(
+        "Use same α for all files",
+        value=False,
+        help="Find optimal α from first file and apply to all. Enables α slider for comparison."
     )
-    alpha_max = st.number_input(
-        "Alpha range (log10 max)",
-        value=14,
-        help="Maximum regularization strength (log10 scale). "
-             "Larger α values produce smoother SCE profiles but may underfit the data. "
-             "End of the search range for optimal α."
-    )
-    n_alphas = st.slider(
-        "Number of alpha values",
-        100, 2000, 1000,
-        help="Number of α values to test via cross-validation between min and max. "
-             "More values = finer search but longer computation time. "
-             "Typically 1000 provides good balance."
-    )
+else:
+    use_same_alpha = False
 
 st.markdown("---")
 col_btn1, col_btn2 = st.columns(2)
@@ -1035,34 +946,9 @@ if st.session_state.get('manual_fitting_open', False) and eqe_file and gen_file 
             sun_spec_manual = st.session_state.sun_spec_manual
             gen_wavelengths_manual = st.session_state.gen_wavelengths_manual
 
-            # Manual fitting settings
-            col_manual1, col_manual2, col_manual3 = st.columns([1, 1, 1])
-
-            with col_manual1:
-                n_segments_manual = st.slider(
-                    "Number of SCE segments",
-                    min_value=3,
-                    max_value=20,
-                    value=10,
-                    key="n_segments_manual",
-                    help="Divide the absorber into segments, each with adjustable SCE"
-                )
-
-            with col_manual2:
-                smoothing_factor_manual = st.slider(
-                    "Smoothing factor",
-                    min_value=0.0,
-                    max_value=10.0,
-                    value=0.0,
-                    step=0.1,
-                    key="smoothing_manual",
-                    help="0 = linear interpolation, higher = smoother curves"
-                )
-
-            with col_manual3:
-                if st.button("Close Manual Fitting", key="close_manual"):
-                    st.session_state.manual_fitting_open = False
-                    st.rerun()
+            if st.button("Close", key="close_manual"):
+                st.session_state.manual_fitting_open = False
+                st.rerun()
 
             # Call the manual fitting function
             manual_sce_fitting_tab(
@@ -1074,8 +960,6 @@ if st.session_state.get('manual_fitting_open', False) and eqe_file and gen_file 
                 gen_wavelengths=gen_wavelengths_manual,
                 wl_min=wl_min,
                 wl_max=wl_max,
-                n_segments_default=n_segments_manual,
-                smoothing_factor_external=smoothing_factor_manual,
                 is_photon_flux=is_photon_flux
             )
         else:
@@ -1274,6 +1158,39 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         st.markdown("---")
         st.subheader("Batch Results Comparison")
 
+        # Check if using same alpha mode
+        use_same_alpha_mode = st.session_state.get('use_same_alpha', False)
+        shared_alpha = st.session_state.get('shared_alpha', None)
+
+        # Get first result for alpha range reference
+        first_result = list(batch_results.values())[0]
+        alphas = first_result['alphas']
+
+        # Alpha slider for same-alpha mode
+        if use_same_alpha_mode and shared_alpha is not None:
+            st.subheader("Regularization strength (applied to all files)")
+
+            log_alpha_min = np.log10(alphas.min())
+            log_alpha_max = np.log10(alphas.max())
+            log_shared_alpha = np.log10(shared_alpha)
+
+            log_current_alpha = st.slider(
+                "log₁₀(α) - Adjust to explore different regularization strengths",
+                min_value=float(log_alpha_min),
+                max_value=float(log_alpha_max),
+                value=float(log_shared_alpha),
+                step=0.01,
+                format="%.2f",
+                key="batch_alpha_slider"
+            )
+            current_alpha = 10**log_current_alpha
+
+            col_info1, col_info2 = st.columns(2)
+            col_info1.metric("Current α", f"{current_alpha:.2e}")
+            col_info2.metric("Optimal α (from first file)", f"{shared_alpha:.2e}")
+        else:
+            current_alpha = None  # Each file uses its own optimal alpha
+
         # Summary table
         summary_data = []
         file_names = list(batch_results.keys())
@@ -1281,8 +1198,15 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # Compute SCE for each file
         sce_profiles = {}
         for file_name, result in batch_results.items():
+            # Determine which alpha to use
+            if use_same_alpha_mode and current_alpha is not None:
+                alpha_to_use = current_alpha
+            else:
+                alpha_to_use = result['best_alpha']
+
+            # Fit on full data for the main SCE profile
             model = CustomRidgeDirect(
-                alpha=result['best_alpha'],
+                alpha=alpha_to_use,
                 L=result['L'],
                 constraint=use_clipping,
                 use_bounded=use_bounded_opt
@@ -1295,10 +1219,14 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             collected_gen = model.coef_ * total_gen
             jsc = trapz_func(collected_gen, result['pos']) * 1.602e-19 * 1e-7 * 1000  # mA/cm²
 
+            # Calculate MSE for current alpha
+            y_fit = model.predict(result['X'])
+            current_mse = np.mean((result['y'] - y_fit)**2)
+
             summary_data.append({
                 'File': file_name,
-                'Optimal α': f"{result['best_alpha']:.2e}",
-                'MSE': f"{result['mse'][result['best_alpha']]:.2e}",
+                'α used': f"{alpha_to_use:.2e}",
+                'MSE': f"{current_mse:.2e}",
                 'Jsc (mA/cm²)': f"{jsc:.2f}"
             })
 
@@ -1313,13 +1241,13 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
 
         for idx, (file_name, result) in enumerate(batch_results.items()):
             color = colors[idx % len(colors)]
-            alphas = result['alphas']
+            file_alphas = result['alphas']
             mse = result['mse']
             best_alpha = result['best_alpha']
 
             # MSE curve
-            mse_values = [mse[a] for a in alphas if a in mse]
-            alphas_plot = [a for a in alphas if a in mse]
+            mse_values = [mse[a] for a in file_alphas if a in mse]
+            alphas_plot = [a for a in file_alphas if a in mse]
 
             fig_cv.add_trace(go.Scatter(
                 x=alphas_plot,
@@ -1330,16 +1258,26 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 hovertemplate=f'{file_name}<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
             ))
 
-            # Optimal point marker
-            fig_cv.add_trace(go.Scatter(
-                x=[best_alpha],
-                y=[mse[best_alpha]],
-                mode='markers',
-                name=f'{file_name} optimal',
-                marker=dict(color=color, size=10, symbol='star'),
-                showlegend=False,
-                hovertemplate=f'{file_name} optimal<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
-            ))
+            # Optimal point marker (only show if not using same alpha with different current)
+            if not use_same_alpha_mode or current_alpha is None:
+                fig_cv.add_trace(go.Scatter(
+                    x=[best_alpha],
+                    y=[mse[best_alpha]],
+                    mode='markers',
+                    name=f'{file_name} optimal',
+                    marker=dict(color=color, size=10, symbol='star'),
+                    showlegend=False,
+                    hovertemplate=f'{file_name} optimal<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
+                ))
+
+        # Add current alpha vertical line if using same alpha mode
+        if use_same_alpha_mode and current_alpha is not None:
+            fig_cv.add_vline(x=current_alpha, line_dash="dash", line_color="red",
+                            annotation_text=f"Current α = {current_alpha:.2e}")
+            # Also show optimal alpha line if different
+            if abs(current_alpha - shared_alpha) / shared_alpha > 0.01:
+                fig_cv.add_vline(x=shared_alpha, line_dash="dot", line_color="gray",
+                                annotation_text=f"Optimal α = {shared_alpha:.2e}")
 
         fig_cv.update_layout(
             title=dict(text='Cross-Validation: MSE vs Alpha', font=dict(size=16, family='Arial Black')),
@@ -1359,9 +1297,16 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
 
         fig_compare = go.Figure()
 
+        # Color mapping for named colors
+        color_map = {'darkblue': (0, 0, 139), 'darkgreen': (0, 100, 0), 'darkred': (139, 0, 0),
+                     'purple': (128, 0, 128), 'orange': (255, 165, 0), 'brown': (165, 42, 42),
+                     'pink': (255, 192, 203), 'gray': (128, 128, 128)}
+
         for idx, (file_name, sce) in enumerate(sce_profiles.items()):
             pos = batch_results[file_name]['pos']
             color = colors[idx % len(colors)]
+
+            # Main SCE line
             fig_compare.add_trace(go.Scatter(
                 x=pos,
                 y=sce,
@@ -1441,10 +1386,13 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # Download batch results
         st.subheader("Download Batch Results")
 
-        default_name = f"sce_batch_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Store default name in session state so it doesn't change on rerun
+        if 'batch_results_name' not in st.session_state:
+            st.session_state.batch_results_name = f"sce_batch_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
         results_name = st.text_input(
             "Results name (for ZIP file)",
-            value=default_name,
+            key="batch_results_name",
             help="Enter a unique name for this batch analysis."
         )
 
@@ -1457,7 +1405,12 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 "=" * 50,
                 f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                 f"Number of files: {len(batch_results)}",
-                f"Used same α for all: {st.session_state.get('use_same_alpha', False)}",
+                f"Used same α for all: {use_same_alpha_mode}",
+            ]
+            if use_same_alpha_mode and current_alpha is not None:
+                info_lines.append(f"  - Current α (slider): {current_alpha:.2e}")
+                info_lines.append(f"  - Optimal α (from first file): {shared_alpha:.2e}")
+            info_lines.extend([
                 "",
                 "Settings:",
                 f"  - Boundaries: x1={x1} nm, x2={x2} nm",
@@ -1465,31 +1418,73 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 f"  - Clipping: {use_clipping}",
                 f"  - Bounded optimization: {use_bounded_opt}",
                 f"  - CV folds: {n_splits}",
+            ])
+            info_lines.extend([
                 "",
                 "Results Summary:",
                 "-" * 50,
-            ]
+            ])
             for item in summary_data:
-                info_lines.append(f"{item['File']}: α={item['Optimal α']}, MSE={item['MSE']}, Jsc={item['Jsc (mA/cm²)']} mA/cm²")
+                info_lines.append(f"{item['File']}: α={item['α used']}, MSE={item['MSE']}, Jsc={item['Jsc (mA/cm²)']} mA/cm²")
 
             zf.writestr("analysis_info.txt", "\n".join(info_lines))
 
-            # Individual SCE files
-            for file_name, sce in sce_profiles.items():
-                pos = batch_results[file_name]['pos']
-                best_alpha = batch_results[file_name]['best_alpha']
-                out = np.column_stack((pos, sce))
-                buffer = io.StringIO()
-                np.savetxt(buffer, out, fmt='%.6f\t%.6f',
-                           header=f'pos(nm)\tSCE (alpha={best_alpha:.2e})')
+            # Export data for each file
+            for file_name, result in batch_results.items():
                 safe_file_name = "".join(c for c in file_name if c.isalnum() or c in ('_', '-', '.')).strip()
-                zf.writestr(f"SCE_{safe_file_name}", buffer.getvalue())
+
+                # Use current alpha if same-alpha mode, otherwise use file's best alpha
+                if use_same_alpha_mode and current_alpha is not None:
+                    alpha_used = current_alpha
+                else:
+                    alpha_used = result['best_alpha']
+
+                # 1. SCE profile
+                sce = sce_profiles[file_name]
+                pos = result['pos']
+                sce_data = np.column_stack((pos, sce))
+                sce_buffer = io.StringIO()
+                np.savetxt(sce_buffer, sce_data, fmt='%.6f\t%.6f',
+                           header=f'pos(nm)\tSCE (alpha={alpha_used:.2e})')
+                zf.writestr(f"SCE_{safe_file_name}.txt", sce_buffer.getvalue())
+
+                # 2. CV data (alpha vs MSE)
+                alphas_file = result['alphas']
+                mse_file = result['mse']
+                cv_data = np.column_stack((alphas_file, [mse_file[a] for a in alphas_file]))
+                cv_buffer = io.StringIO()
+                np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e',
+                           header=f'alpha\tMSE (optimal_alpha={result["best_alpha"]:.2e})')
+                zf.writestr(f"CV_{safe_file_name}.txt", cv_buffer.getvalue())
+
+                # 3. EQE data (original + fit)
+                lam = result['lam']
+                inc_flux = result['inc_flux']
+                y = result['y']
+                eqe_measured = y / inc_flux
+
+                # Compute EQE fit at the used alpha
+                model_fit = CustomRidgeDirect(
+                    alpha=alpha_used,
+                    L=result['L'],
+                    constraint=use_clipping,
+                    use_bounded=use_bounded_opt
+                )
+                model_fit.fit(result['X_weighted'], result['y_weighted'])
+                y_fit = model_fit.predict(result['X'])
+                eqe_fit = y_fit / inc_flux
+
+                eqe_data = np.column_stack((lam, eqe_measured, eqe_fit))
+                eqe_buffer = io.StringIO()
+                np.savetxt(eqe_buffer, eqe_data, fmt='%.6f\t%.6f\t%.6f',
+                           header=f'wavelength(nm)\tEQE_measured\tEQE_fit (alpha={alpha_used:.2e})')
+                zf.writestr(f"EQE_{safe_file_name}.txt", eqe_buffer.getvalue())
 
         zip_buffer.seek(0)
 
         safe_name = "".join(c for c in results_name if c.isalnum() or c in ('_', '-')).strip()
         if not safe_name:
-            safe_name = default_name
+            safe_name = "sce_batch_results"
 
         st.download_button(
             label="Download Batch Results (ZIP)",
@@ -1499,7 +1494,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             use_container_width=True
         )
 
-        st.caption("ZIP includes: analysis_info.txt with summary and individual SCE profiles for each file")
+        st.caption("ZIP includes: analysis_info.txt, and for each file: SCE profile, CV data (alpha vs MSE), EQE data (measured + fit)")
 
     else:
         # === SINGLE FILE MODE DISPLAY ===
@@ -1576,15 +1571,6 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         model_optimal = CustomRidgeDirect(alpha=best_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
         model_optimal.fit(X_weighted, y_weighted)
         y_fit_optimal = model_optimal.predict(X)  # Predict on unweighted X for display
-
-        # Extract SCE with uncertainty for optimal alpha
-        coefs = []
-        for tr, val in kf.split(X_weighted):
-            m2 = CustomRidgeDirect(alpha=best_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
-            m2.fit(X_weighted[tr], y_weighted[tr])
-            coefs.append(m2.coef_)
-        coefs = np.vstack(coefs)
-        sce_mean, sce_std = coefs.mean(0), coefs.std(0)
 
         # Plot CV curve
         col1, col2 = st.columns(2)
@@ -1717,47 +1703,6 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         with col_sce:
             # Create interactive SCE profile plot with Plotly
             fig3 = go.Figure()
-
-            # Show optimal alpha profile in light grey if current is different
-            if abs(current_alpha - best_alpha) / best_alpha > 0.01:
-                # Optimal upper bound
-                fig3.add_trace(go.Scatter(
-                    x=pos,
-                    y=sce_mean + sce_std,
-                    mode='lines',
-                    name='Optimal ± σ',
-                    line=dict(width=0),
-                    showlegend=False,
-                    hoverinfo='skip',
-                    opacity=0.3
-                ))
-
-                # Optimal mean
-                fig3.add_trace(go.Scatter(
-                    x=pos,
-                    y=sce_mean,
-                    mode='lines',
-                    name='Optimal α SCE',
-                    line=dict(color='lightgray', width=2),
-                    fill='tonexty',
-                    fillcolor='rgba(211, 211, 211, 0.2)',
-                    hovertemplate='Depth: %{x:.1f} nm<br>SCE (opt): %{y:.4f}<extra></extra>',
-                    opacity=0.5
-                ))
-
-                # Optimal lower bound
-                fig3.add_trace(go.Scatter(
-                    x=pos,
-                    y=sce_mean - sce_std,
-                    mode='lines',
-                    name='Optimal lower',
-                    line=dict(width=0),
-                    fill='tonexty',
-                    fillcolor='rgba(211, 211, 211, 0.2)',
-                    showlegend=False,
-                    hoverinfo='skip',
-                    opacity=0.3
-                ))
 
             # Current alpha profile (solid line)
             fig3.add_trace(go.Scatter(
@@ -1897,11 +1842,13 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # Download results
         st.subheader("Download results")
 
-        # Custom name for results
-        default_name = f"sce_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Custom name for results - store in session state so it doesn't change on rerun
+        if 'single_results_name' not in st.session_state:
+            st.session_state.single_results_name = f"sce_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
         results_name = st.text_input(
             "Results name (for ZIP file)",
-            value=default_name,
+            key="single_results_name",
             help="Enter a unique name for this analysis. This will be used as the ZIP filename."
         )
 
@@ -1946,8 +1893,6 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             y_fit_current=y_fit_current,
             y_fit_optimal=y_fit_optimal,
             sce_current=sce_current,
-            sce_mean=sce_mean,
-            sce_std=sce_std,
             current_alpha=current_alpha,
             best_alpha=best_alpha,
             eqe_original_wavelengths=eqe_original_wavelengths,
@@ -1959,7 +1904,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # Sanitize filename
         safe_name = "".join(c for c in results_name if c.isalnum() or c in ('_', '-')).strip()
         if not safe_name:
-            safe_name = default_name
+            safe_name = "sce_results"
 
         st.download_button(
             label="Save All Results (ZIP)",
@@ -1972,35 +1917,19 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         st.caption("ZIP includes: CV results, EQE data, SCE profiles, generation analysis, and analysis_info.txt with all settings")
 
         st.markdown("**Individual downloads:**")
-        col_dl1, col_dl2 = st.columns(2)
 
-        with col_dl1:
-            # Download current alpha SCE
-            out_current = np.column_stack((pos, sce_current))
-            buffer_current = io.StringIO()
-            np.savetxt(buffer_current, out_current, fmt='%.6f\t%.6f',
-                       header=f'pos(nm)\tSCE (alpha={current_alpha:.2e})')
+        # Download current alpha SCE
+        out_current = np.column_stack((pos, sce_current))
+        buffer_current = io.StringIO()
+        np.savetxt(buffer_current, out_current, fmt='%.6f\t%.6f',
+                   header=f'pos(nm)\tSCE (alpha={current_alpha:.2e})')
 
-            st.download_button(
-                label=f"Download current α SCE data",
-                data=buffer_current.getvalue(),
-                file_name=f"SCE_alpha_{current_alpha:.2e}.txt",
-                mime="text/plain"
-            )
-
-        with col_dl2:
-            # Download optimal alpha SCE with uncertainty
-            out = np.column_stack((pos, sce_mean, sce_std))
-            buffer = io.StringIO()
-            np.savetxt(buffer, out, fmt='%.6f\t%.6f\t%.6f',
-                       header=f'pos(nm)\tSCE_mean\tSCE_std (optimal alpha={best_alpha:.2e})')
-
-            st.download_button(
-                label="Download optimal α SCE data",
-                data=buffer.getvalue(),
-                file_name="extracted_SCE_optimal.txt",
-                mime="text/plain"
-            )
+        st.download_button(
+            label=f"Download current α SCE data",
+            data=buffer_current.getvalue(),
+            file_name=f"SCE_alpha_{current_alpha:.2e}.txt",
+            mime="text/plain"
+        )
 
 elif not (eqe_file_list and gen_file and sun_file):
     st.info("Please upload all three data files to begin analysis")
@@ -2021,5 +1950,5 @@ elif not (eqe_file_list and gen_file and sun_file):
     3. **Run analysis:**
        - Click "Run analysis" to extract SCE profile
        - View cross-validation results and fitted EQE
-       - Download extracted SCE data with uncertainties
+       - Download extracted SCE data
     """)
