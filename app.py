@@ -6,8 +6,9 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from scipy.constants import physical_constants as pc
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d, UnivariateSpline
 from scipy.optimize import lsq_linear
+from scipy.signal import savgol_filter
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 from sklearn.metrics import mean_squared_error
@@ -56,15 +57,17 @@ def load_file_data(file_source):
         return file_source
 
 def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_optimal,
-                       sce_current, current_alpha, best_alpha,
+                       sce_current_raw, current_alpha, best_alpha,
                        eqe_original_wavelengths, eqe_original_values, gen_filtered,
-                       settings_info):
+                       settings_info, sce_current_smooth=None):
     """Create an in-memory ZIP file containing all analysis results.
 
     Parameters:
     -----------
     settings_info : dict
         Dictionary containing all settings and file information for the analysis_info.txt file
+    sce_current_smooth : array, optional
+        Smoothed SCE profile (if smoothing is enabled)
     """
     zip_buffer = io.BytesIO()
 
@@ -101,16 +104,29 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
                    header=f'wavelength(nm)\tEQE_fit (optimal alpha={best_alpha:.2e})')
         zf.writestr('eqe_fit_optimal.txt', eqe_fit_optimal_buffer.getvalue())
 
-        # 6. SCE current alpha (position, sce)
-        sce_current_data = np.column_stack((pos, sce_current))
-        sce_current_buffer = io.StringIO()
-        np.savetxt(sce_current_buffer, sce_current_data, fmt='%.6f\t%.6f',
-                   header=f'pos(nm)\tSCE (alpha={current_alpha:.2e})')
+        # 6. SCE current alpha (position, sce - include both raw and smoothed if available)
+        if sce_current_smooth is not None:
+            smooth_method = settings_info.get('smooth_method', 'Unknown')
+            if smooth_method == "Savitzky-Golay":
+                smoothing_note = f"Savgol window={settings_info.get('smooth_window')}, poly={settings_info.get('smooth_polyorder')}"
+            else:
+                smoothing_note = f"Spline s={settings_info.get('spline_smoothing'):.4f}"
+            sce_current_data = np.column_stack((pos, sce_current_raw, sce_current_smooth))
+            sce_current_buffer = io.StringIO()
+            np.savetxt(sce_current_buffer, sce_current_data, fmt='%.6f\t%.6f\t%.6f',
+                       header=f'pos(nm)\tSCE_raw (alpha={current_alpha:.2e})\tSCE_smoothed ({smoothing_note})')
+        else:
+            sce_current_data = np.column_stack((pos, sce_current_raw))
+            sce_current_buffer = io.StringIO()
+            np.savetxt(sce_current_buffer, sce_current_data, fmt='%.6f\t%.6f',
+                       header=f'pos(nm)\tSCE (alpha={current_alpha:.2e})')
         zf.writestr('sce_current.txt', sce_current_buffer.getvalue())
 
         # 7. Generation analysis (position, total_gen, collected_gen, cumulative_jsc)
+        # Use smoothed SCE if available, otherwise raw
+        sce_for_gen = sce_current_smooth if sce_current_smooth is not None else sce_current_raw
         total_generation = trapz_func(gen_filtered, lam, axis=1)
-        collected_generation = sce_current * total_generation
+        collected_generation = sce_for_gen * total_generation
 
         # Calculate cumulative Jsc
         cumulative_jsc = np.zeros_like(pos)
@@ -181,6 +197,25 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
             "-" * 40,
             f"Alpha range (log10): {settings_info.get('alpha_min', 'N/A')} to {settings_info.get('alpha_max', 'N/A')}",
             f"Number of alphas:    {settings_info.get('n_alphas', 'N/A')}",
+        ])
+
+        # SCE Smoothing section
+        info_lines.extend([
+            "",
+            "SCE SMOOTHING",
+            "-" * 40,
+            f"Enabled:             {settings_info.get('use_smoothing', False)}",
+        ])
+        if settings_info.get('use_smoothing', False):
+            smooth_method = settings_info.get('smooth_method', 'Savitzky-Golay')
+            info_lines.append(f"Method:              {smooth_method}")
+            if smooth_method == "Savitzky-Golay":
+                info_lines.append(f"Window size:         {settings_info.get('smooth_window', 'N/A')}")
+                info_lines.append(f"Polynomial order:    {settings_info.get('smooth_polyorder', 'N/A')}")
+            else:  # Smoothing Spline
+                info_lines.append(f"Smoothing parameter: {settings_info.get('spline_smoothing', 'N/A')}")
+
+        info_lines.extend([
             "",
             "RESULTS",
             "-" * 40,
@@ -1489,6 +1524,60 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # Comparison plot - SCE profiles overlaid
         st.subheader("SCE Profile Comparison")
 
+        # Store raw SCE profiles for reference
+        sce_profiles_raw = {k: v.copy() for k, v in sce_profiles.items()}
+
+        # Smoothing controls next to SCE plot
+        smooth_col1, smooth_col2, smooth_col3 = st.columns([1, 1, 1])
+        with smooth_col1:
+            use_smoothing_batch = st.checkbox("Smooth SCE", value=False, key="batch_smooth_checkbox",
+                                              help="Apply smoothing filter to remove oscillations")
+
+        # Get max allowed window from first result
+        max_window_batch = len(first_result['pos']) // 2 * 2 - 1
+        # Initialize default values
+        smooth_method_batch = "Savitzky-Golay"
+        smooth_window_batch = 51
+        smooth_poly_batch = 3
+        spline_smoothing_batch = 0.01
+
+        if use_smoothing_batch:
+            with smooth_col2:
+                smooth_method_batch = st.selectbox("Method", ["Savitzky-Golay", "Smoothing Spline"],
+                                                   key="batch_smooth_method",
+                                                   help="Savgol: local polynomial. Spline: global fit, preserves peak positions better.")
+
+            if smooth_method_batch == "Savitzky-Golay":
+                with smooth_col3:
+                    smooth_window_batch = st.slider("Window", min_value=5, max_value=min(501, max_window_batch),
+                                                    value=min(51, max_window_batch), step=2, key="batch_smooth_window",
+                                                    help="Larger = more smoothing")
+                    smooth_poly_batch = st.slider("Poly order", min_value=1, max_value=min(smooth_window_batch-1, 15),
+                                                  value=min(3, smooth_window_batch-1), key="batch_smooth_poly",
+                                                  help="Lower = smoother, higher = preserves more detail")
+            else:  # Smoothing Spline
+                with smooth_col3:
+                    spline_smoothing_batch = st.slider("Smoothing", min_value=0.0001, max_value=1.0,
+                                                       value=0.001, step=0.0001, format="%.4f",
+                                                       key="batch_spline_smoothing",
+                                                       help="Higher = smoother curve. Preserves peak positions.")
+
+        # Compute smoothed SCE if enabled
+        sce_profiles_smoothed = {}
+        if use_smoothing_batch:
+            for file_name, sce_raw in sce_profiles_raw.items():
+                pos_batch = batch_results[file_name]['pos']
+                if smooth_method_batch == "Savitzky-Golay":
+                    sce_smooth = savgol_filter(sce_raw, smooth_window_batch, smooth_poly_batch)
+                else:  # Smoothing Spline
+                    n_points = len(sce_raw)
+                    s_param = spline_smoothing_batch * n_points
+                    spline = UnivariateSpline(pos_batch, sce_raw, s=s_param)
+                    sce_smooth = spline(pos_batch)
+                if use_clipping:
+                    sce_smooth = np.clip(sce_smooth, 0, 1)
+                sce_profiles_smoothed[file_name] = sce_smooth
+
         fig_compare = go.Figure()
 
         # Color mapping for named colors
@@ -1496,22 +1585,36 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                      'purple': (128, 0, 128), 'orange': (255, 165, 0), 'brown': (165, 42, 42),
                      'pink': (255, 192, 203), 'gray': (128, 128, 128)}
 
-        for idx, (file_name, sce) in enumerate(sce_profiles.items()):
+        for idx, (file_name, sce_raw) in enumerate(sce_profiles_raw.items()):
             pos = batch_results[file_name]['pos']
             color = colors[idx % len(colors)]
 
-            # Main SCE line
+            # Raw SCE line (solid if no smoothing, dashed if smoothing enabled)
+            line_style = dict(color=color, width=1, dash='dash') if use_smoothing_batch else dict(color=color, width=2)
+            name_suffix = ' (raw)' if use_smoothing_batch else ''
             fig_compare.add_trace(go.Scatter(
                 x=pos,
-                y=sce,
+                y=sce_raw,
                 mode='lines',
-                name=file_name,
-                line=dict(color=color, width=2),
+                name=f'{file_name}{name_suffix}',
+                line=line_style,
                 hovertemplate=f'{file_name}<br>Depth: %{{x:.1f}} nm<br>SCE: %{{y:.4f}}<extra></extra>'
             ))
 
+            # Smoothed SCE line (if smoothing enabled)
+            if use_smoothing_batch:
+                fig_compare.add_trace(go.Scatter(
+                    x=pos,
+                    y=sce_profiles_smoothed[file_name],
+                    mode='lines',
+                    name=f'{file_name} (smoothed)',
+                    line=dict(color=color, width=2),
+                    hovertemplate=f'{file_name} smoothed<br>Depth: %{{x:.1f}} nm<br>SCE: %{{y:.4f}}<extra></extra>'
+                ))
+
+        plot_title = 'SCE Profile Comparison (Raw vs Smoothed)' if use_smoothing_batch else 'SCE Profile Comparison'
         fig_compare.update_layout(
-            title=dict(text='SCE Profile Comparison', font=dict(size=18, family='Arial Black')),
+            title=dict(text=plot_title, font=dict(size=18, family='Arial Black')),
             xaxis=dict(title='Depth (nm)', gridcolor='lightgray'),
             yaxis=dict(title='Collection Efficiency (-)', range=[0, 1], gridcolor='lightgray'),
             template='plotly_white',
@@ -1534,16 +1637,6 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             inc_flux = result['inc_flux']
             y = result['y']
 
-            # Compute fit
-            model = CustomRidgeDirect(
-                alpha=result['best_alpha'],
-                L=result['L'],
-                constraint=use_clipping,
-                use_bounded=use_bounded_opt
-            )
-            model.fit(result['X_weighted'], result['y_weighted'])
-            y_fit = model.predict(result['X'])
-
             # Measured EQE
             fig_eqe_compare.add_trace(go.Scatter(
                 x=lam,
@@ -1554,12 +1647,15 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 hovertemplate=f'{file_name}<br>λ: %{{x:.1f}} nm<br>EQE: %{{y:.4f}}<extra></extra>'
             ))
 
-            # Fitted EQE
+            # Fitted EQE from raw SCE
+            sce_for_fit = sce_profiles_smoothed[file_name] if use_smoothing_batch else sce_profiles_raw[file_name]
+            y_fit = result['X'] @ sce_for_fit
+            fit_label = f'{file_name} (smoothed fit)' if use_smoothing_batch else f'{file_name} (fit)'
             fig_eqe_compare.add_trace(go.Scatter(
                 x=lam,
                 y=y_fit/inc_flux,
                 mode='lines',
-                name=f'{file_name} (fit)',
+                name=fit_label,
                 line=dict(color=color, width=2),
                 hovertemplate=f'{file_name} fit<br>λ: %{{x:.1f}} nm<br>EQE: %{{y:.4f}}<extra></extra>'
             ))
@@ -1612,7 +1708,15 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 f"  - Clipping: {use_clipping}",
                 f"  - Bounded optimization: {use_bounded_opt}",
                 f"  - CV folds: {n_splits}",
+                f"  - SCE smoothing: {use_smoothing_batch}",
             ])
+            if use_smoothing_batch:
+                info_lines.append(f"    - Method: {smooth_method_batch}")
+                if smooth_method_batch == "Savitzky-Golay":
+                    info_lines.append(f"    - Window size: {smooth_window_batch}")
+                    info_lines.append(f"    - Polynomial order: {smooth_poly_batch}")
+                else:
+                    info_lines.append(f"    - Smoothing parameter: {spline_smoothing_batch:.4f}")
             info_lines.extend([
                 "",
                 "Results Summary:",
@@ -1633,13 +1737,26 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 else:
                     alpha_used = result['best_alpha']
 
-                # 1. SCE profile
-                sce = sce_profiles[file_name]
+                # 1. SCE profile (include both raw and smoothed if smoothing is enabled)
+                sce_raw = sce_profiles_raw[file_name]
                 pos = result['pos']
-                sce_data = np.column_stack((pos, sce))
-                sce_buffer = io.StringIO()
-                np.savetxt(sce_buffer, sce_data, fmt='%.6f\t%.6f',
-                           header=f'pos(nm)\tSCE (alpha={alpha_used:.2e})')
+
+                if use_smoothing_batch and file_name in sce_profiles_smoothed:
+                    sce_smooth = sce_profiles_smoothed[file_name]
+                    if smooth_method_batch == "Savitzky-Golay":
+                        smoothing_note = f"Savgol window={smooth_window_batch}, poly={smooth_poly_batch}"
+                    else:
+                        smoothing_note = f"Spline s={spline_smoothing_batch:.4f}"
+                    # Include both raw and smoothed
+                    sce_data = np.column_stack((pos, sce_raw, sce_smooth))
+                    sce_buffer = io.StringIO()
+                    np.savetxt(sce_buffer, sce_data, fmt='%.6f\t%.6f\t%.6f',
+                               header=f'pos(nm)\tSCE_raw (alpha={alpha_used:.2e})\tSCE_smoothed ({smoothing_note})')
+                else:
+                    sce_data = np.column_stack((pos, sce_raw))
+                    sce_buffer = io.StringIO()
+                    np.savetxt(sce_buffer, sce_data, fmt='%.6f\t%.6f',
+                               header=f'pos(nm)\tSCE (alpha={alpha_used:.2e})')
                 zf.writestr(f"SCE_{safe_file_name}.txt", sce_buffer.getvalue())
 
                 # 2. CV data (alpha vs MSE)
@@ -1651,27 +1768,29 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                            header=f'alpha\tMSE (optimal_alpha={result["best_alpha"]:.2e})')
                 zf.writestr(f"CV_{safe_file_name}.txt", cv_buffer.getvalue())
 
-                # 3. EQE data (original + fit)
+                # 3. EQE data (original + fit, include both raw and smoothed fits if smoothing enabled)
                 lam = result['lam']
                 inc_flux = result['inc_flux']
                 y = result['y']
                 eqe_measured = y / inc_flux
 
-                # Compute EQE fit at the used alpha
-                model_fit = CustomRidgeDirect(
-                    alpha=alpha_used,
-                    L=result['L'],
-                    constraint=use_clipping,
-                    use_bounded=use_bounded_opt
-                )
-                model_fit.fit(result['X_weighted'], result['y_weighted'])
-                y_fit = model_fit.predict(result['X'])
-                eqe_fit = y_fit / inc_flux
+                # Compute EQE fit from raw SCE
+                y_fit_raw = result['X'] @ sce_raw
+                eqe_fit_raw = y_fit_raw / inc_flux
 
-                eqe_data = np.column_stack((lam, eqe_measured, eqe_fit))
-                eqe_buffer = io.StringIO()
-                np.savetxt(eqe_buffer, eqe_data, fmt='%.6f\t%.6f\t%.6f',
-                           header=f'wavelength(nm)\tEQE_measured\tEQE_fit (alpha={alpha_used:.2e})')
+                if use_smoothing_batch and file_name in sce_profiles_smoothed:
+                    # Also compute EQE fit from smoothed SCE
+                    y_fit_smooth = result['X'] @ sce_smooth
+                    eqe_fit_smooth = y_fit_smooth / inc_flux
+                    eqe_data = np.column_stack((lam, eqe_measured, eqe_fit_raw, eqe_fit_smooth))
+                    eqe_buffer = io.StringIO()
+                    np.savetxt(eqe_buffer, eqe_data, fmt='%.6f\t%.6f\t%.6f\t%.6f',
+                               header=f'wavelength(nm)\tEQE_measured\tEQE_fit_raw (alpha={alpha_used:.2e})\tEQE_fit_smoothed ({smoothing_note})')
+                else:
+                    eqe_data = np.column_stack((lam, eqe_measured, eqe_fit_raw))
+                    eqe_buffer = io.StringIO()
+                    np.savetxt(eqe_buffer, eqe_data, fmt='%.6f\t%.6f\t%.6f',
+                               header=f'wavelength(nm)\tEQE_measured\tEQE_fit (alpha={alpha_used:.2e})')
                 zf.writestr(f"EQE_{safe_file_name}.txt", eqe_buffer.getvalue())
 
         zip_buffer.seek(0)
@@ -1965,6 +2084,71 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # Extract SCE with uncertainty
         st.subheader("Extracted spatial collection efficiency (SCE)")
 
+        # Store raw SCE for reference
+        sce_current_raw = sce_current.copy()
+        sce_optimal_raw = sce_optimal.copy()
+        current_mse = np.mean((y - y_fit_current)**2)
+
+        # Smoothing controls next to SCE plot
+        smooth_col1, smooth_col2, smooth_col3, smooth_col4 = st.columns([1, 1, 1, 1.5])
+        with smooth_col1:
+            use_smoothing = st.checkbox("Smooth SCE", value=False, key="single_smooth_checkbox",
+                                        help="Apply smoothing filter to remove oscillations")
+
+        # Get max allowed window for Savgol
+        max_window = len(sce_current_raw) // 2 * 2 - 1
+        # Initialize default values
+        smooth_method = "Savitzky-Golay"
+        smooth_window = 51
+        smooth_poly = 3
+        spline_smoothing = 0.01
+
+        if use_smoothing:
+            with smooth_col2:
+                smooth_method = st.selectbox("Method", ["Savitzky-Golay", "Smoothing Spline"],
+                                             key="single_smooth_method",
+                                             help="Savgol: local polynomial. Spline: global fit, preserves peak positions better.")
+
+            if smooth_method == "Savitzky-Golay":
+                with smooth_col3:
+                    smooth_window = st.slider("Window", min_value=5, max_value=min(501, max_window),
+                                              value=min(51, max_window), step=2, key="single_smooth_window",
+                                              help="Larger = more smoothing")
+                    smooth_poly = st.slider("Poly order", min_value=1, max_value=min(smooth_window-1, 15),
+                                            value=min(3, smooth_window-1), key="single_smooth_poly",
+                                            help="Lower = smoother, higher = preserves more detail")
+
+                # Apply Savitzky-Golay smoothing
+                sce_current_smooth = savgol_filter(sce_current_raw, smooth_window, smooth_poly)
+                sce_optimal_smooth = savgol_filter(sce_optimal_raw, smooth_window, smooth_poly)
+
+            else:  # Smoothing Spline
+                with smooth_col3:
+                    spline_smoothing = st.slider("Smoothing", min_value=0.0001, max_value=1.0,
+                                                 value=0.001, step=0.0001, format="%.4f",
+                                                 key="single_spline_smoothing",
+                                                 help="Higher = smoother curve. Preserves peak positions.")
+
+                # Apply smoothing spline
+                n_points = len(sce_current_raw)
+                s_param = spline_smoothing * n_points
+                spline_current = UnivariateSpline(pos, sce_current_raw, s=s_param)
+                spline_optimal = UnivariateSpline(pos, sce_optimal_raw, s=s_param)
+                sce_current_smooth = spline_current(pos)
+                sce_optimal_smooth = spline_optimal(pos)
+
+            if use_clipping:
+                sce_current_smooth = np.clip(sce_current_smooth, 0, 1)
+                sce_optimal_smooth = np.clip(sce_optimal_smooth, 0, 1)
+
+            # Calculate smoothed EQE fit and MSE
+            y_fit_current_smooth = X @ sce_current_smooth
+            mse_smooth = np.mean((y - y_fit_current_smooth)**2)
+            with smooth_col4:
+                st.metric("Smoothed MSE", f"{mse_smooth:.2e}",
+                         delta=f"{((mse_smooth/current_mse - 1)*100):+.1f}% vs raw",
+                         delta_color="inverse")
+
         # Checkbox for showing generation analysis
         show_gen_analysis = st.checkbox(
             "Show SCE × generation analysis",
@@ -1984,27 +2168,50 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
 
             # Optimal alpha profile (grey, shown when different from current)
             if abs(current_alpha - best_alpha) / best_alpha > 0.01:
+                line_style = dict(color='gray', width=1, dash='dash') if use_smoothing else dict(color='gray', width=2)
                 fig3.add_trace(go.Scatter(
                     x=pos,
-                    y=sce_optimal,
+                    y=sce_optimal_raw,
                     mode='lines',
-                    name=f'Optimal α={best_alpha:.1e}',
-                    line=dict(color='gray', width=2),
+                    name=f'Optimal α={best_alpha:.1e}' + (' (raw)' if use_smoothing else ''),
+                    line=line_style,
                     hovertemplate='Depth: %{x:.1f} nm<br>SCE (optimal): %{y:.4f}<extra></extra>'
                 ))
 
-            # Current alpha profile (solid line)
+            # Current alpha profile - raw (dashed if smoothing enabled)
+            line_style_current = dict(color='darkblue', width=1, dash='dash') if use_smoothing else dict(color='darkblue', width=3)
             fig3.add_trace(go.Scatter(
                 x=pos,
-                y=sce_current,
+                y=sce_current_raw,
                 mode='lines',
-                name=f'Current α={current_alpha:.1e}',
-                line=dict(color='darkblue', width=3),
+                name=f'Current α={current_alpha:.1e}' + (' (raw)' if use_smoothing else ''),
+                line=line_style_current,
                 hovertemplate='Depth: %{x:.1f} nm<br>SCE (current): %{y:.4f}<extra></extra>'
             ))
 
+            # Smoothed profiles (if smoothing enabled)
+            if use_smoothing:
+                if abs(current_alpha - best_alpha) / best_alpha > 0.01:
+                    fig3.add_trace(go.Scatter(
+                        x=pos,
+                        y=sce_optimal_smooth,
+                        mode='lines',
+                        name=f'Optimal α={best_alpha:.1e} (smoothed)',
+                        line=dict(color='gray', width=2),
+                        hovertemplate='Depth: %{x:.1f} nm<br>SCE (optimal, smoothed): %{y:.4f}<extra></extra>'
+                    ))
+                fig3.add_trace(go.Scatter(
+                    x=pos,
+                    y=sce_current_smooth,
+                    mode='lines',
+                    name=f'Current α={current_alpha:.1e} (smoothed)',
+                    line=dict(color='darkblue', width=3),
+                    hovertemplate='Depth: %{x:.1f} nm<br>SCE (current, smoothed): %{y:.4f}<extra></extra>'
+                ))
+
+            plot_title = 'Extracted SCE Profile (Raw vs Smoothed)' if use_smoothing else 'Extracted SCE Profile'
             fig3.update_layout(
-                title=dict(text='Extracted SCE Profile', font=dict(size=18, family='Arial Black')),
+                title=dict(text=plot_title, font=dict(size=18, family='Arial Black')),
                 xaxis=dict(title='Depth (nm)', gridcolor='lightgray'),
                 yaxis=dict(title='Collection Efficiency (-)', range=[0, 1], gridcolor='lightgray'),
                 template='plotly_white',
@@ -2019,11 +2226,14 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # SCE × Generation Analysis (only if checkbox is selected)
         if show_gen_analysis:
             with col_gen:
+                # Use smoothed SCE for analysis if enabled
+                sce_for_analysis = sce_current_smooth if use_smoothing else sce_current_raw
+
                 # Calculate total generation profile (integrate over wavelengths)
                 total_generation = trapz_func(gen_filtered, lam, axis=1)
 
                 # Calculate collected generation (SCE × total generation)
-                collected_generation_current = sce_current * total_generation
+                collected_generation_current = sce_for_analysis * total_generation
 
                 # Calculate cumulative Jsc (integrate from left to right)
                 cumulative_jsc_current = np.zeros_like(pos)
@@ -2064,9 +2274,9 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 # Add SCE line (on SCE axis)
                 fig4.add_trace(go.Scatter(
                     x=pos,
-                    y=sce_current,
+                    y=sce_for_analysis,
                     mode='lines',
-                    name='SCE',
+                    name='SCE' + (' (smoothed)' if use_smoothing else ''),
                     line=dict(color='darkblue', width=2),
                     hovertemplate='Depth: %{x:.1f} nm<br>SCE: %{y:.4f}<extra></extra>',
                     yaxis='y'
@@ -2169,6 +2379,11 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             'alpha_min': alpha_min,
             'alpha_max': alpha_max,
             'n_alphas': n_alphas,
+            'use_smoothing': use_smoothing,
+            'smooth_method': smooth_method if use_smoothing else None,
+            'smooth_window': smooth_window if use_smoothing and smooth_method == "Savitzky-Golay" else None,
+            'smooth_polyorder': smooth_poly if use_smoothing and smooth_method == "Savitzky-Golay" else None,
+            'spline_smoothing': spline_smoothing if use_smoothing and smooth_method == "Smoothing Spline" else None,
         }
 
         # Save All Results button (ZIP with all data)
@@ -2181,12 +2396,13 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             y=y,
             y_fit_current=y_fit_current,
             y_fit_optimal=y_fit_optimal,
-            sce_current=sce_current,
+            sce_current_raw=sce_current_raw,
             current_alpha=current_alpha,
             best_alpha=best_alpha,
             eqe_original_wavelengths=eqe_original_wavelengths,
             eqe_original_values=eqe_original_values,
             gen_filtered=gen_filtered,
+            sce_current_smooth=sce_current_smooth if use_smoothing else None,
             settings_info=settings_info
         )
 
@@ -2207,11 +2423,21 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
 
         st.markdown("**Individual downloads:**")
 
-        # Download current alpha SCE
-        out_current = np.column_stack((pos, sce_current))
-        buffer_current = io.StringIO()
-        np.savetxt(buffer_current, out_current, fmt='%.6f\t%.6f',
-                   header=f'pos(nm)\tSCE (alpha={current_alpha:.2e})')
+        # Download current alpha SCE (include both raw and smoothed if smoothing enabled)
+        if use_smoothing:
+            if smooth_method == "Savitzky-Golay":
+                smoothing_note = f"Savgol window={smooth_window}, poly={smooth_poly}"
+            else:
+                smoothing_note = f"Spline s={spline_smoothing:.4f}"
+            out_current = np.column_stack((pos, sce_current_raw, sce_current_smooth))
+            buffer_current = io.StringIO()
+            np.savetxt(buffer_current, out_current, fmt='%.6f\t%.6f\t%.6f',
+                       header=f'pos(nm)\tSCE_raw (alpha={current_alpha:.2e})\tSCE_smoothed ({smoothing_note})')
+        else:
+            out_current = np.column_stack((pos, sce_current_raw))
+            buffer_current = io.StringIO()
+            np.savetxt(buffer_current, out_current, fmt='%.6f\t%.6f',
+                       header=f'pos(nm)\tSCE (alpha={current_alpha:.2e})')
 
         st.download_button(
             label=f"Download current α SCE data",
