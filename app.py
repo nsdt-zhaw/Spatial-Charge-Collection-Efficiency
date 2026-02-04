@@ -93,7 +93,7 @@ def load_file_data(file_source):
 def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_optimal,
                        sce_current_raw, current_alpha, best_alpha,
                        eqe_original_wavelengths, eqe_original_values, gen_filtered,
-                       settings_info, sce_current_smooth=None):
+                       settings_info, sce_current_smooth=None, mse_pure=None):
     """Create an in-memory ZIP file containing all analysis results.
 
     Parameters:
@@ -102,14 +102,24 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
         Dictionary containing all settings and file information for the analysis_info.txt file
     sce_current_smooth : array, optional
         Smoothed SCE profile (if smoothing is enabled)
+    mse_pure : dict, optional
+        Pure MSE values without penalty (when penalties are active)
     """
     zip_buffer = io.BytesIO()
 
+    # Check if penalties were used (mse_pure differs from mse)
+    penalties_active = mse_pure is not None and mse_pure != mse
+
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # 1. CV results (alpha, mse)
-        cv_data = np.column_stack((alphas, [mse[a] for a in alphas]))
-        cv_buffer = io.StringIO()
-        np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e', header='alpha\tMSE')
+        # 1. CV results (alpha, mse, and optionally mse_pure)
+        if penalties_active:
+            cv_data = np.column_stack((alphas, [mse_pure[a] for a in alphas], [mse[a] for a in alphas]))
+            cv_buffer = io.StringIO()
+            np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e\t%.6e', header='alpha\tMSE_pure\tCV_score_combined')
+        else:
+            cv_data = np.column_stack((alphas, [mse[a] for a in alphas]))
+            cv_buffer = io.StringIO()
+            np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e', header='alpha\tMSE')
         zf.writestr('cv_results.txt', cv_buffer.getvalue())
 
         # 2. EQE original (wavelength, eqe)
@@ -249,12 +259,34 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
             else:  # Smoothing Spline
                 info_lines.append(f"Smoothing parameter: {settings_info.get('spline_smoothing', 'N/A')}")
 
+        # CV Penalty settings
+        info_lines.extend([
+            "",
+            "CV PENALTIES",
+            "-" * 40,
+            f"Clipping penalty:    {settings_info.get('use_clipping_penalty', False)}",
+        ])
+        if settings_info.get('use_clipping_penalty', False):
+            info_lines.append(f"  Weight:            {settings_info.get('clipping_penalty_weight', 0.0)}")
+        info_lines.append(f"Oscillation penalty: {settings_info.get('use_oscillation_penalty', False)}")
+        if settings_info.get('use_oscillation_penalty', False):
+            info_lines.append(f"  Allowed osc.:      {settings_info.get('oscillation_threshold', 0)}")
+            info_lines.append(f"  Weight:            {settings_info.get('oscillation_penalty_weight', 0.0)}")
+
         info_lines.extend([
             "",
             "RESULTS",
             "-" * 40,
             f"Optimal alpha:       {best_alpha:.4e}",
-            f"Optimal MSE:         {mse[best_alpha]:.4e}",
+        ])
+        if penalties_active:
+            info_lines.extend([
+                f"Optimal pure MSE:    {mse_pure[best_alpha]:.4e}",
+                f"Optimal CV score:    {mse[best_alpha]:.4e}",
+            ])
+        else:
+            info_lines.append(f"Optimal MSE:         {mse[best_alpha]:.4e}")
+        info_lines.extend([
             f"Current alpha:       {current_alpha:.4e}",
             f"Current MSE:         {mse.get(current_alpha, 'N/A') if current_alpha in mse else 'interpolated'}",
             f"Final Jsc:           {cumulative_jsc[-1]:.2f} mA/cm²",
@@ -267,7 +299,12 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
             "=" * 60,
             "FILES IN THIS ARCHIVE",
             "=" * 60,
-            "cv_results.txt          - Cross-validation alpha vs MSE",
+        ])
+        if penalties_active:
+            info_lines.append("cv_results.txt          - CV alpha vs pure MSE and combined CV score")
+        else:
+            info_lines.append("cv_results.txt          - Cross-validation alpha vs MSE")
+        info_lines.extend([
             "eqe_original.txt        - Original EQE data",
             "eqe_interpolated.txt    - EQE interpolated to generation wavelengths",
             "eqe_fit_current.txt     - Fitted EQE at current alpha",
@@ -277,8 +314,7 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
             "generation_analysis.txt - Generation and Jsc analysis",
             "analysis_info.txt       - This file",
             "",
-        ]
-        )
+        ])
 
         zf.writestr('analysis_info.txt', '\n'.join(info_lines))
 
@@ -1294,6 +1330,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
     st.session_state.clipping_penalty_weight = clipping_penalty_weight
     st.session_state.use_oscillation_penalty = use_oscillation_penalty
     st.session_state.oscillation_penalty_weight = oscillation_penalty_weight
+    st.session_state.oscillation_threshold = oscillation_threshold
     # For backward compatibility with single file
     if not is_batch and batch_results:
         first_result = list(batch_results.values())[0]
@@ -1416,9 +1453,12 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # CV comparison plot
         st.subheader("Cross-Validation Comparison")
 
-        # Check if clipping penalty was used
+        # Check if penalties were used
         use_clipping_penalty_batch = st.session_state.get('use_clipping_penalty', False)
         clipping_penalty_weight_batch = st.session_state.get('clipping_penalty_weight', 0.0)
+        use_oscillation_penalty_batch = st.session_state.get('use_oscillation_penalty', False)
+        oscillation_penalty_weight_batch = st.session_state.get('oscillation_penalty_weight', 0.0)
+        any_penalty_active = use_clipping_penalty_batch or use_oscillation_penalty_batch
 
         fig_cv = go.Figure()
         colors = ['darkblue', 'darkgreen', 'darkred', 'purple', 'orange', 'brown', 'pink', 'gray']
@@ -1432,8 +1472,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
 
             alphas_plot = [a for a in file_alphas if a in mse]
 
-            # If clipping penalty was used, show both curves
-            if use_clipping_penalty_batch and mse_pure != mse:
+            # If any penalty was used, show both curves
+            if any_penalty_active and mse_pure != mse:
                 # Pure MSE curve (dashed)
                 mse_pure_values = [mse_pure[a] for a in alphas_plot]
                 fig_cv.add_trace(go.Scatter(
@@ -1492,8 +1532,10 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         title_parts = ['Cross-Validation: MSE vs Alpha']
         if use_clipping_penalty_batch:
             title_parts.append(f'Clipping Penalty (w={clipping_penalty_weight_batch:.1f})')
+        if use_oscillation_penalty_batch:
+            title_parts.append(f'Osc. Penalty (w={oscillation_penalty_weight_batch:.1e})')
         plot_title = title_parts[0] + (' (' + ', '.join(title_parts[1:]) + ')' if len(title_parts) > 1 else '')
-        yaxis_title = 'CV Score / MSE' if use_clipping_penalty_batch else 'Average MSE'
+        yaxis_title = 'CV Score / MSE' if any_penalty_active else 'Average MSE'
 
         fig_cv.update_layout(
             title=dict(text=plot_title, font=dict(size=16, family='Arial Black')),
@@ -1695,6 +1737,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 f"  - Clipping: {use_clipping}",
                 f"  - Bounded optimization: {use_bounded_opt}",
                 f"  - CV folds: {n_splits}",
+                f"  - Clipping penalty: {use_clipping_penalty_batch}" + (f" (weight={clipping_penalty_weight_batch})" if use_clipping_penalty_batch else ""),
+                f"  - Oscillation penalty: {use_oscillation_penalty_batch}" + (f" (weight={oscillation_penalty_weight_batch:.1e})" if use_oscillation_penalty_batch else ""),
                 f"  - SCE smoothing: {use_smoothing_batch}",
             ])
             if use_smoothing_batch:
@@ -1746,13 +1790,26 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                                header=f'pos(nm)\tSCE (alpha={alpha_used:.2e})')
                 zf.writestr(f"SCE_{safe_file_name}.txt", sce_buffer.getvalue())
 
-                # 2. CV data (alpha vs MSE)
+                # 2. CV data (alpha vs MSE, and optionally pure MSE)
                 alphas_file = result['alphas']
                 mse_file = result['mse']
-                cv_data = np.column_stack((alphas_file, [mse_file[a] for a in alphas_file]))
-                cv_buffer = io.StringIO()
-                np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e',
-                           header=f'alpha\tMSE (optimal_alpha={result["best_alpha"]:.2e})')
+                mse_pure_file = result.get('mse_pure', mse_file)
+
+                # Check if penalties were active (mse_pure differs from mse)
+                penalties_active_file = any_penalty_active and mse_pure_file != mse_file
+
+                if penalties_active_file:
+                    cv_data = np.column_stack((alphas_file,
+                                               [mse_pure_file[a] for a in alphas_file],
+                                               [mse_file[a] for a in alphas_file]))
+                    cv_buffer = io.StringIO()
+                    np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e\t%.6e',
+                               header=f'alpha\tMSE_pure\tCV_score_combined (optimal_alpha={result["best_alpha"]:.2e})')
+                else:
+                    cv_data = np.column_stack((alphas_file, [mse_file[a] for a in alphas_file]))
+                    cv_buffer = io.StringIO()
+                    np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e',
+                               header=f'alpha\tMSE (optimal_alpha={result["best_alpha"]:.2e})')
                 zf.writestr(f"CV_{safe_file_name}.txt", cv_buffer.getvalue())
 
                 # 3. EQE data (original + fit, include both raw and smoothed fits if smoothing enabled)
@@ -1794,7 +1851,10 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             use_container_width=True
         )
 
-        st.caption("ZIP includes: analysis_info.txt, and for each file: SCE profile, CV data (alpha vs MSE), EQE data (measured + fit)")
+        if any_penalty_active:
+            st.caption("ZIP includes: analysis_info.txt, and for each file: SCE profile, CV data (alpha vs pure MSE & combined CV score), EQE data (measured + fit)")
+        else:
+            st.caption("ZIP includes: analysis_info.txt, and for each file: SCE profile, CV data (alpha vs MSE), EQE data (measured + fit)")
 
     else:
         # === SINGLE FILE MODE DISPLAY ===
@@ -1805,6 +1865,9 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         penalty_values = st.session_state.get('penalty_values', {a: 0 for a in alphas})
         use_clipping_penalty_stored = st.session_state.get('use_clipping_penalty', False)
         clipping_penalty_weight_stored = st.session_state.get('clipping_penalty_weight', 0.0)
+        use_oscillation_penalty_stored = st.session_state.get('use_oscillation_penalty', False)
+        oscillation_penalty_weight_stored = st.session_state.get('oscillation_penalty_weight', 0.0)
+        any_penalty_stored = use_clipping_penalty_stored or use_oscillation_penalty_stored
         best_alpha = st.session_state.best_alpha
         X = st.session_state.X
         y = st.session_state.y
@@ -1844,7 +1907,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         n_cols = 3
         if weight_factor_stored is not None:
             n_cols += 1
-        if use_clipping_penalty_stored:
+        if any_penalty_stored:
             n_cols += 1
 
         info_cols = st.columns(n_cols)
@@ -1870,7 +1933,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             penalty_array = np.array([penalty_values.get(a, 0) for a in alphas])
             current_penalty = np.interp(log_current_alpha, log_alphas_array, penalty_array)
 
-        if use_clipping_penalty_stored:
+        if any_penalty_stored:
             # Show pure MSE
             info_cols[col_idx].metric("Pure MSE", f"{current_pure_mse:.2e}")
             col_idx += 1
@@ -1908,7 +1971,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             # Create interactive CV plot with Plotly
             fig1 = go.Figure()
 
-            if use_clipping_penalty_stored and mse_pure != mse:
+            if any_penalty_stored and mse_pure != mse:
                 # Show both pure MSE and combined score
                 mse_pure_values = [mse_pure[a] for a in alphas]
                 mse_combined_values = [mse[a] for a in alphas]
@@ -1923,12 +1986,20 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     hovertemplate='Alpha: %{x:.2e}<br>Pure MSE: %{y:.2e}<extra></extra>'
                 ))
 
+                # Build legend label for combined score
+                penalty_parts = []
+                if use_clipping_penalty_stored:
+                    penalty_parts.append(f'clip:{clipping_penalty_weight_stored:.1f}')
+                if use_oscillation_penalty_stored:
+                    penalty_parts.append(f'osc:{oscillation_penalty_weight_stored:.1e}')
+                penalty_label = ' + '.join(penalty_parts)
+
                 # Combined score curve (solid)
                 fig1.add_trace(go.Scatter(
                     x=alphas,
                     y=mse_combined_values,
                     mode='lines',
-                    name=f'CV Score (MSE + {clipping_penalty_weight_stored:.1f}×penalty)',
+                    name=f'CV Score (MSE + {penalty_label})',
                     line=dict(color='royalblue', width=2),
                     hovertemplate='Alpha: %{x:.2e}<br>CV Score: %{y:.2e}<extra></extra>'
                 ))
@@ -1957,7 +2028,13 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                         hovertemplate='Pure MSE optimal α: %{x:.2e}<br>Pure MSE: %{y:.2e}<extra></extra>'
                     ))
 
-                plot_title = 'Cross-Validation: MSE vs Alpha (with Clipping Penalty)'
+                # Build plot title
+                title_penalty_parts = []
+                if use_clipping_penalty_stored:
+                    title_penalty_parts.append('Clipping')
+                if use_oscillation_penalty_stored:
+                    title_penalty_parts.append('Oscillation')
+                plot_title = f'Cross-Validation: MSE vs Alpha (with {" & ".join(title_penalty_parts)} Penalty)'
                 yaxis_title = 'CV Score / MSE'
             else:
                 # Standard single curve
@@ -2371,6 +2448,11 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             'smooth_window': smooth_window if use_smoothing and smooth_method == "Savitzky-Golay" else None,
             'smooth_polyorder': smooth_poly if use_smoothing and smooth_method == "Savitzky-Golay" else None,
             'spline_smoothing': spline_smoothing if use_smoothing and smooth_method == "Smoothing Spline" else None,
+            'use_clipping_penalty': use_clipping_penalty,
+            'clipping_penalty_weight': clipping_penalty_weight if use_clipping_penalty else None,
+            'use_oscillation_penalty': use_oscillation_penalty,
+            'oscillation_threshold': oscillation_threshold if use_oscillation_penalty else None,
+            'oscillation_penalty_weight': oscillation_penalty_weight if use_oscillation_penalty else None,
         }
 
         # Save All Results button (ZIP with all data)
@@ -2390,7 +2472,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             eqe_original_values=eqe_original_values,
             gen_filtered=gen_filtered,
             sce_current_smooth=sce_current_smooth if use_smoothing else None,
-            settings_info=settings_info
+            settings_info=settings_info,
+            mse_pure=mse_pure
         )
 
         # Sanitize filename
@@ -2406,7 +2489,10 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             use_container_width=True
         )
 
-        st.caption("ZIP includes: CV results, EQE data, SCE profiles, generation analysis, and analysis_info.txt with all settings")
+        if use_clipping_penalty or use_oscillation_penalty:
+            st.caption("ZIP includes: CV results (pure MSE & combined CV score), EQE data, SCE profiles, generation analysis, and analysis_info.txt with all settings")
+        else:
+            st.caption("ZIP includes: CV results, EQE data, SCE profiles, generation analysis, and analysis_info.txt with all settings")
 
         st.markdown("**Individual downloads:**")
 
