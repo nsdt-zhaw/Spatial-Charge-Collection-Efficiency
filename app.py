@@ -36,6 +36,40 @@ try:
 except ImportError:
     MANUAL_FITTING_AVAILABLE = False
 
+# Helper functions for wavelength header detection
+import re
+
+def is_wavelength_header(line):
+    """Check if a line is a wavelength header using multiple criteria."""
+    line_lower = line.lower()
+    # Check for common position column names
+    has_position_col = any(x in line_lower for x in ['x (nm)', 'depth (nm)', 'depth(nm)', 'position'])
+    # Check if line contains multiple 'nm' occurrences (wavelength columns)
+    nm_count = line_lower.count(' nm') + line_lower.count('\tnm')
+    has_multiple_nm = nm_count >= 2
+    # Check for numeric values followed by nm (e.g., "315.0 nm")
+    has_wavelength_pattern = bool(re.search(r'\d+\.?\d*\s*nm', line_lower))
+    return has_position_col or has_multiple_nm or (has_wavelength_pattern and nm_count >= 1)
+
+def extract_wavelengths_from_line(line, expected_count):
+    """Extract wavelength values from a header line."""
+    parts = line.replace('#', '').strip().split()
+    if len(parts) <= 1:
+        return None
+    try:
+        wavelengths = []
+        for part in parts[1:]:
+            # Try to extract number from string like "315.0" or "315.0nm"
+            num_str = ''.join(c for c in part if c.isdigit() or c == '.')
+            if num_str:
+                wavelengths.append(float(num_str))
+        wavelengths = np.array(wavelengths)
+        if len(wavelengths) == expected_count:
+            return wavelengths
+    except:
+        pass
+    return None
+
 # Helper functions for file management
 def list_files_in_directory(directory, extensions=['.txt', '.csv', '.dat', '.sp']):
     """List all files with given extensions in a directory."""
@@ -310,26 +344,12 @@ def preview_generation_profile(gen_file):
             # Local file - can read header
             with open(gen_file, 'r') as f:
                 lines = f.readlines()
-                # Look for the header line with wavelengths (usually starts with "x (nm)")
+                # Look for the header line with wavelengths
                 for line in lines:
-                    if 'x (nm)' in line.lower() or ('nm' in line and not line.strip().startswith('#')):
-                        # Parse the header line
-                        parts = line.replace('#', '').strip().split()
-                        if len(parts) > 1:
-                            try:
-                                # Extract numeric values from strings like "360 nm", "370 nm", etc.
-                                wavelengths = []
-                                for part in parts[1:]:
-                                    # Try to extract number from string
-                                    num_str = ''.join(c for c in part if c.isdigit() or c == '.')
-                                    if num_str:
-                                        wavelengths.append(float(num_str))
-                                wavelengths = np.array(wavelengths)
-                                if len(wavelengths) != generation.shape[1]:
-                                    wavelengths = None  # Mismatch, ignore
-                                break
-                            except:
-                                pass
+                    if is_wavelength_header(line):
+                        wavelengths = extract_wavelengths_from_line(line, generation.shape[1])
+                        if wavelengths is not None:
+                            break
         else:
             # Uploaded file - try to read header
             try:
@@ -338,21 +358,10 @@ def preview_generation_profile(gen_file):
                 gen_file.seek(0)  # Reset for np.loadtxt
                 lines = content.split('\n')
                 for line in lines:
-                    if 'x (nm)' in line.lower() or ('nm' in line and not line.strip().startswith('#')):
-                        parts = line.replace('#', '').strip().split()
-                        if len(parts) > 1:
-                            try:
-                                wavelengths = []
-                                for part in parts[1:]:
-                                    num_str = ''.join(c for c in part if c.isdigit() or c == '.')
-                                    if num_str:
-                                        wavelengths.append(float(num_str))
-                                wavelengths = np.array(wavelengths)
-                                if len(wavelengths) != generation.shape[1]:
-                                    wavelengths = None
-                                break
-                            except:
-                                pass
+                    if is_wavelength_header(line):
+                        wavelengths = extract_wavelengths_from_line(line, generation.shape[1])
+                        if wavelengths is not None:
+                            break
             except:
                 pass
 
@@ -623,21 +632,10 @@ def read_uploaded_data(eqe_file, gen_file, sun_file, x1, x2):
             with open(gen_file, 'r') as f:
                 lines = f.readlines()
                 for line in lines:
-                    if 'x (nm)' in line.lower() or ('nm' in line and not line.strip().startswith('#')):
-                        parts = line.replace('#', '').strip().split()
-                        if len(parts) > 1:
-                            try:
-                                gen_wavelengths = []
-                                for part in parts[1:]:
-                                    num_str = ''.join(c for c in part if c.isdigit() or c == '.')
-                                    if num_str:
-                                        gen_wavelengths.append(float(num_str))
-                                gen_wavelengths = np.array(gen_wavelengths)
-                                if len(gen_wavelengths) != gen_raw.shape[1]:
-                                    gen_wavelengths = None
-                                break
-                            except:
-                                pass
+                    if is_wavelength_header(line):
+                        gen_wavelengths = extract_wavelengths_from_line(line, gen_raw.shape[1])
+                        if gen_wavelengths is not None:
+                            break
         else:
             # Uploaded file - try to read header
             try:
@@ -646,21 +644,10 @@ def read_uploaded_data(eqe_file, gen_file, sun_file, x1, x2):
                 gen_file.seek(0)
                 lines = content.split('\n')
                 for line in lines:
-                    if 'x (nm)' in line.lower() or ('nm' in line and not line.strip().startswith('#')):
-                        parts = line.replace('#', '').strip().split()
-                        if len(parts) > 1:
-                            try:
-                                gen_wavelengths = []
-                                for part in parts[1:]:
-                                    num_str = ''.join(c for c in part if c.isdigit() or c == '.')
-                                    if num_str:
-                                        gen_wavelengths.append(float(num_str))
-                                gen_wavelengths = np.array(gen_wavelengths)
-                                if len(gen_wavelengths) != gen_raw.shape[1]:
-                                    gen_wavelengths = None
-                                break
-                            except:
-                                pass
+                    if is_wavelength_header(line):
+                        gen_wavelengths = extract_wavelengths_from_line(line, gen_raw.shape[1])
+                        if gen_wavelengths is not None:
+                            break
             except:
                 pass
 
