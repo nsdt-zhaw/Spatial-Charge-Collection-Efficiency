@@ -1556,6 +1556,38 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # Store raw SCE profiles for reference
         sce_profiles_raw = {k: v.copy() for k, v in sce_profiles.items()}
 
+        # Option to upload reference SCE profiles for comparison
+        with st.expander("Upload reference SCE profiles (e.g., for validation)"):
+            ref_sce_files_batch = st.file_uploader(
+                "Upload SCE files (2 columns: position in nm, SCE value)",
+                type=['txt', 'csv', 'dat'],
+                accept_multiple_files=True,
+                key="ref_sce_batch",
+                help="Upload one or more reference SCE profiles to overlay on the plot"
+            )
+            ref_x_shift_batch = st.number_input(
+                "X-axis shift (nm)",
+                value=0.0,
+                step=1.0,
+                format="%.1f",
+                key="ref_x_shift_batch",
+                help="Shift the position axis of uploaded reference profiles (positive = shift right)"
+            )
+            ref_sce_profiles_batch = {}
+            if ref_sce_files_batch:
+                for ref_file in ref_sce_files_batch:
+                    try:
+                        ref_data = np.loadtxt(ref_file, comments='#')
+                        if ref_data.ndim == 1:
+                            st.warning(f"Skipped {ref_file.name}: needs 2 columns")
+                            continue
+                        ref_sce_profiles_batch[ref_file.name] = {
+                            'pos': ref_data[:, 0] + ref_x_shift_batch,
+                            'sce': ref_data[:, 1]
+                        }
+                    except Exception as e:
+                        st.warning(f"Could not load {ref_file.name}: {e}")
+
         # Smoothing controls next to SCE plot
         smooth_col1, smooth_col2, smooth_col3 = st.columns([1, 1, 1])
         with smooth_col1:
@@ -1640,6 +1672,19 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     line=dict(color=color, width=2),
                     hovertemplate=f'{file_name} smoothed<br>Depth: %{{x:.1f}} nm<br>SCE: %{{y:.4f}}<extra></extra>'
                 ))
+
+        # Add reference SCE profiles if uploaded
+        ref_colors = ['black', 'dimgray', 'darkslategray', 'slategray']
+        for idx, (ref_name, ref_data) in enumerate(ref_sce_profiles_batch.items()):
+            ref_color = ref_colors[idx % len(ref_colors)]
+            fig_compare.add_trace(go.Scatter(
+                x=ref_data['pos'],
+                y=ref_data['sce'],
+                mode='lines',
+                name=f'Ref: {ref_name}',
+                line=dict(color=ref_color, width=2, dash='dot'),
+                hovertemplate=f'{ref_name}<br>Depth: %{{x:.1f}} nm<br>SCE: %{{y:.4f}}<extra></extra>'
+            ))
 
         plot_title = 'SCE Profile Comparison (Raw vs Smoothed)' if use_smoothing_batch else 'SCE Profile Comparison'
         fig_compare.update_layout(
@@ -2213,6 +2258,38 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                          delta=f"{((mse_smooth/current_mse - 1)*100):+.1f}% vs raw",
                          delta_color="inverse")
 
+        # Option to upload reference SCE profiles for comparison
+        with st.expander("Upload reference SCE profiles (e.g., for validation)"):
+            ref_sce_files_single = st.file_uploader(
+                "Upload SCE files (2 columns: position in nm, SCE value)",
+                type=['txt', 'csv', 'dat'],
+                accept_multiple_files=True,
+                key="ref_sce_single",
+                help="Upload one or more reference SCE profiles to overlay on the plot"
+            )
+            ref_x_shift_single = st.number_input(
+                "X-axis shift (nm)",
+                value=0.0,
+                step=1.0,
+                format="%.1f",
+                key="ref_x_shift_single",
+                help="Shift the position axis of uploaded reference profiles (positive = shift right)"
+            )
+            ref_sce_profiles_single = {}
+            if ref_sce_files_single:
+                for ref_file in ref_sce_files_single:
+                    try:
+                        ref_data = np.loadtxt(ref_file, comments='#')
+                        if ref_data.ndim == 1:
+                            st.warning(f"Skipped {ref_file.name}: needs 2 columns")
+                            continue
+                        ref_sce_profiles_single[ref_file.name] = {
+                            'pos': ref_data[:, 0] + ref_x_shift_single,
+                            'sce': ref_data[:, 1]
+                        }
+                    except Exception as e:
+                        st.warning(f"Could not load {ref_file.name}: {e}")
+
         # Checkbox for showing generation analysis
         show_gen_analysis = st.checkbox(
             "Show SCE × generation analysis",
@@ -2271,6 +2348,19 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     name=f'Current α={current_alpha:.1e} (smoothed)',
                     line=dict(color='darkblue', width=3),
                     hovertemplate='Depth: %{x:.1f} nm<br>SCE (current, smoothed): %{y:.4f}<extra></extra>'
+                ))
+
+            # Add reference SCE profiles if uploaded
+            ref_colors = ['black', 'dimgray', 'darkslategray', 'slategray']
+            for idx, (ref_name, ref_data) in enumerate(ref_sce_profiles_single.items()):
+                ref_color = ref_colors[idx % len(ref_colors)]
+                fig3.add_trace(go.Scatter(
+                    x=ref_data['pos'],
+                    y=ref_data['sce'],
+                    mode='lines',
+                    name=f'Ref: {ref_name}',
+                    line=dict(color=ref_color, width=2, dash='dot'),
+                    hovertemplate=f'{ref_name}<br>Depth: %{{x:.1f}} nm<br>SCE: %{{y:.4f}}<extra></extra>'
                 ))
 
             plot_title = 'Extracted SCE Profile (Raw vs Smoothed)' if use_smoothing else 'Extracted SCE Profile'
