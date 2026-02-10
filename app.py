@@ -93,7 +93,8 @@ def load_file_data(file_source):
 def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_optimal,
                        sce_current_raw, current_alpha, best_alpha,
                        eqe_original_wavelengths, eqe_original_values, gen_filtered,
-                       settings_info, sce_current_smooth=None, mse_pure=None):
+                       settings_info, sce_current_smooth=None, mse_pure=None,
+                       oob_mask=None):
     """Create an in-memory ZIP file containing all analysis results.
 
     Parameters:
@@ -111,15 +112,16 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
     penalties_active = mse_pure is not None and mse_pure != mse
 
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # 1. CV results (alpha, mse, and optionally mse_pure)
+        # 1. CV results (alpha, mse, and optionally mse_pure, in_bounds)
+        in_bounds_col = np.array([int(not oob_mask.get(a, False)) for a in alphas]) if oob_mask else np.ones(len(alphas), dtype=int)
         if penalties_active:
-            cv_data = np.column_stack((alphas, [mse_pure[a] for a in alphas], [mse[a] for a in alphas]))
+            cv_data = np.column_stack((alphas, [mse_pure[a] for a in alphas], [mse[a] for a in alphas], in_bounds_col))
             cv_buffer = io.StringIO()
-            np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e\t%.6e', header='alpha\tMSE_pure\tCV_score_combined')
+            np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e\t%.6e\t%d', header='alpha\tMSE_pure\tCV_score_combined\tin_bounds')
         else:
-            cv_data = np.column_stack((alphas, [mse[a] for a in alphas]))
+            cv_data = np.column_stack((alphas, [mse[a] for a in alphas], in_bounds_col))
             cv_buffer = io.StringIO()
-            np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e', header='alpha\tMSE')
+            np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e\t%d', header='alpha\tMSE\tin_bounds')
         zf.writestr('cv_results.txt', cv_buffer.getvalue())
 
         # 2. EQE original (wavelength, eqe)
@@ -272,6 +274,35 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
         if settings_info.get('use_oscillation_penalty', False):
             info_lines.append(f"  Allowed osc.:      {settings_info.get('oscillation_threshold', 0)}")
             info_lines.append(f"  Weight:            {settings_info.get('oscillation_penalty_weight', 0.0)}")
+
+        # Bounds screening settings
+        info_lines.extend([
+            "",
+            "BOUNDS SCREENING",
+            "-" * 40,
+            f"Screen by bounds:    {settings_info.get('screen_out_of_bounds', False)}",
+        ])
+        if settings_info.get('screen_out_of_bounds', False):
+            info_lines.extend([
+                f"  SCE min:           {settings_info.get('screen_bounds_min', -0.001)}",
+                f"  SCE max:           {settings_info.get('screen_bounds_max', 1.001)}",
+            ])
+
+        # Weighted averaging settings
+        info_lines.extend([
+            "",
+            "WEIGHTED AVERAGING",
+            "-" * 40,
+            f"Enabled:             {settings_info.get('use_weighted_avg', False)}",
+        ])
+        if settings_info.get('use_weighted_avg', False):
+            info_lines.extend([
+                f"  SCE bounds min:    {settings_info.get('sce_bounds_min', -0.001)}",
+                f"  SCE bounds max:    {settings_info.get('sce_bounds_max', 1.001)}",
+                f"  MSE sat. factor:   {settings_info.get('mse_saturation_factor', 10.0)}",
+                f"  Deriv. threshold:  {settings_info.get('mse_deriv_threshold', 0.01)}",
+                f"  Use CV for MSE:    {settings_info.get('use_cv_for_mse', True)}",
+            ])
 
         info_lines.extend([
             "",
@@ -514,19 +545,23 @@ st.set_page_config(page_title="SCE Extraction Analysis", layout="wide", page_ico
 if 'manual_fitting_open' not in st.session_state:
     st.session_state.manual_fitting_open = False
 
-col_title, col_clear = st.columns([6, 1])
-with col_title:
-    st.title("EQE fitting and SCE extraction")
-    st.markdown("Upload your experimental EQE data and simulated generation profiles to extract the spatial collection efficiency (SCE)")
-with col_clear:
-    st.markdown("<br>", unsafe_allow_html=True)  # Spacing
+st.title("EQE fitting and SCE extraction")
+st.markdown("Upload your experimental EQE data and simulated generation profiles to extract the spatial collection efficiency (SCE)")
+
+with st.sidebar:
     if st.button("🔄 Clear All", use_container_width=True, type="secondary", help="Reset the app and clear all data"):
         st.session_state.clear()
         st.rerun()
 
-# Custom CSS for smaller headers on small screens
+# Custom CSS for smaller headers on small screens and sidebar width
 st.markdown("""
 <style>
+    /* Widen sidebar for settings */
+    [data-testid="stSidebar"] {
+        min-width: 420px;
+        max-width: 480px;
+    }
+
     /* Reduce header sizes */
     h1 {
         font-size: 2rem !important;
@@ -643,6 +678,199 @@ def compute_oscillation_penalty(coef, threshold=0):
     sign_changes = np.sum(diff[:-1] * diff[1:] < 0)
     # Only penalize oscillations beyond threshold
     return max(0, sign_changes - threshold)
+
+
+def fit_sce_unclipped(X, y, L, alpha):
+    """Fit SCE without any clipping (for weighted averaging approach)."""
+    A = X.T @ X + alpha * (L.T @ L)
+    b = X.T @ y
+    return np.linalg.solve(A, b)
+
+
+def compute_mse(X, y, sce):
+    """Compute mean squared error for a solution."""
+    y_pred = X @ sce
+    return np.mean((y_pred - y) ** 2)
+
+
+def weighted_mse_averaging(X, y, L, alphas, sce_bounds_min=-0.001, sce_bounds_max=1.001,
+                           mse_saturation_factor=10.0, mse_deriv_threshold=0.01,
+                           use_cv=False, n_splits=5, progress_callback=None):
+    """Apply weighted MSE averaging with MSE-derivative-based saturation detection.
+
+    This approach:
+    1. Extracts SCE WITHOUT clipping for all alpha values
+    2. Screens solutions by physical bounds (SCE within sce_bounds_min to sce_bounds_max)
+    3. Starts from first in-bounds solution (lowest alpha with valid SCE)
+    4. Continues until MSE > mse_saturation_factor * min_MSE, then checks for saturation
+    5. Stops when |d(log MSE)/d(log alpha)| < mse_deriv_threshold (MSE curve flattens)
+    6. Averages all valid solutions using 1/MSE as weights
+
+    Parameters:
+    -----------
+    X : array
+        Design matrix (wavelengths x positions)
+    y : array
+        Target values (EQE * photon_flux)
+    L : array
+        Regularization matrix (first or second derivative)
+    alphas : array
+        Alpha values to test (should be in increasing order)
+    sce_bounds_min, sce_bounds_max : float
+        Physical bounds for SCE screening (default: -0.001 to 1.001 for numerical tolerance)
+    mse_saturation_factor : float
+        Only check for saturation after MSE > factor * min_MSE (default: 10.0)
+    mse_deriv_threshold : float
+        Stop when |d(log MSE)/d(log alpha)| < threshold (default: 0.01)
+    use_cv : bool
+        If True, use k-fold CV to compute MSE (slower but more robust). Default: False
+    n_splits : int
+        Number of CV folds if use_cv=True. Default: 5
+    progress_callback : callable, optional
+        Function to call with progress (0-1) for UI updates
+
+    Returns:
+    --------
+    dict with keys:
+        'sce_avg': Weighted average SCE profile
+        'sce_std': Weighted standard deviation at each position
+        'best_alpha': First in-bounds alpha (equivalent to CV optimal without clipping)
+        'all_sce': All SCE profiles
+        'all_mse': All MSE values
+        'bounds_mask': Boolean mask for in-bounds solutions
+        'final_mask': Boolean mask for solutions included in averaging
+        'min_mse': Minimum MSE among in-bounds solutions
+        'avg_mse': MSE of the weighted average solution
+        'saturation_alpha': Alpha where saturation was detected
+        'passing_alphas': Alpha values that passed all criteria
+    """
+    all_sce = []
+    all_mse = []
+    bounds_mask = []
+
+    # Set up CV if requested
+    if use_cv:
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+
+    # Step 1 & 2: Extract without clipping, screen by physical bounds
+    for idx, alpha in enumerate(alphas):
+        sce = fit_sce_unclipped(X, y, L, alpha)
+        all_sce.append(sce)
+
+        if use_cv:
+            # Compute CV-based MSE
+            fold_mse_list = []
+            for tr, val in kf.split(X):
+                sce_fold = fit_sce_unclipped(X[tr], y[tr], L, alpha)
+                y_val_pred = X[val] @ sce_fold
+                fold_mse_list.append(np.mean((y[val] - y_val_pred) ** 2))
+            mse = np.mean(fold_mse_list)
+        else:
+            # Full-data MSE (faster)
+            mse = compute_mse(X, y, sce)
+
+        all_mse.append(mse)
+        in_bounds = np.all(sce >= sce_bounds_min) and np.all(sce <= sce_bounds_max)
+        bounds_mask.append(in_bounds)
+
+        if progress_callback:
+            progress_callback((idx + 1) / len(alphas))
+
+    all_sce = np.array(all_sce)
+    all_mse = np.array(all_mse)
+    bounds_mask = np.array(bounds_mask)
+
+    if not np.any(bounds_mask):
+        return {
+            'sce_avg': None, 'sce_std': None, 'best_alpha': None,
+            'all_sce': all_sce, 'all_mse': all_mse, 'bounds_mask': bounds_mask,
+            'final_mask': bounds_mask, 'min_mse': None, 'avg_mse': None,
+            'saturation_alpha': None, 'passing_alphas': np.array([]),
+            'error': 'No solutions within physical bounds'
+        }
+
+    # Step 3: Find first in-bounds solution and minimum MSE
+    in_bounds_indices = np.where(bounds_mask)[0]
+    start_idx = in_bounds_indices[0]
+
+    screened_mse = np.where(bounds_mask, all_mse, np.inf)
+    min_idx = np.argmin(screened_mse)
+    min_screened_mse = screened_mse[min_idx]
+    best_alpha = alphas[min_idx]  # CV optimal = min MSE among in-bounds
+
+    # Step 4 & 5: Find saturation point
+    log_alphas = np.log10(alphas)
+    log_mse = np.log10(all_mse)
+    mse_threshold_for_saturation = mse_saturation_factor * min_screened_mse
+
+    saturation_idx = len(alphas) - 1  # Default: end of array
+
+    for i in range(min_idx + 1, len(alphas) - 1):
+        if not bounds_mask[i]:
+            continue
+
+        # Only check for saturation after MSE > threshold
+        if all_mse[i] < mse_threshold_for_saturation:
+            continue
+
+        # Compute local derivative using central difference
+        d_log_mse = log_mse[i + 1] - log_mse[i - 1]
+        d_log_alpha = log_alphas[i + 1] - log_alphas[i - 1]
+        deriv = d_log_mse / d_log_alpha
+
+        if abs(deriv) < mse_deriv_threshold:
+            saturation_idx = i
+            break
+
+    saturation_idx = max(saturation_idx, min_idx)
+
+    # Create final mask: from start_idx to saturation_idx, in-bounds only
+    final_mask = np.zeros(len(alphas), dtype=bool)
+    for i in range(start_idx, saturation_idx + 1):
+        if bounds_mask[i]:
+            final_mask[i] = True
+
+    passing_sce = all_sce[final_mask]
+    passing_alphas = alphas[final_mask]
+    passing_mse = all_mse[final_mask]
+
+    if len(passing_sce) == 0:
+        return {
+            'sce_avg': None, 'sce_std': None, 'best_alpha': best_alpha,
+            'all_sce': all_sce, 'all_mse': all_mse, 'bounds_mask': bounds_mask,
+            'final_mask': final_mask, 'min_mse': min_screened_mse, 'avg_mse': None,
+            'saturation_alpha': alphas[saturation_idx], 'passing_alphas': np.array([]),
+            'error': 'No solutions in valid range'
+        }
+
+    # Step 6: Weighted average using 1/MSE as weights
+    weights = 1.0 / passing_mse
+    weights = weights / np.sum(weights)
+
+    sce_avg = np.sum(weights[:, np.newaxis] * passing_sce, axis=0)
+
+    # Weighted standard deviation
+    sce_mean_diff = passing_sce - sce_avg
+    sce_var = np.sum(weights[:, np.newaxis] * sce_mean_diff**2, axis=0)
+    sce_std = np.sqrt(sce_var)
+
+    avg_mse = compute_mse(X, y, sce_avg)
+    saturation_alpha = alphas[saturation_idx]
+
+    return {
+        'sce_avg': sce_avg,
+        'sce_std': sce_std,
+        'best_alpha': best_alpha,
+        'all_sce': all_sce,
+        'all_mse': all_mse,
+        'bounds_mask': bounds_mask,
+        'final_mask': final_mask,
+        'min_mse': min_screened_mse,
+        'avg_mse': avg_mse,
+        'saturation_alpha': saturation_alpha,
+        'passing_alphas': passing_alphas,
+        'n_averaged': len(passing_alphas),
+    }
 
 
 def read_uploaded_data(eqe_file, gen_file, sun_file, x1, x2):
@@ -837,87 +1065,71 @@ def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None
     return X, y, L, (lam, pos, photon_flux, gen)
 
 
-# Main window controls
-st.markdown("---")
-st.header("📁 Data selection")
-
 # Get available files from resources
 eqe_files = list_files_in_directory("resources/eqe data")
 gen_files = list_files_in_directory("resources/gen data")
 default_sun_path = "resources/Sunspectrum.sp"
 
-col_upload1, col_upload2, col_upload3 = st.columns(3)
+# --- Sidebar: Data selection ---
+st.sidebar.header("📁 Data selection")
 
-with col_upload1:
-    st.subheader("EQE data")
-    eqe_source = st.radio("Source:", ["Local file", "Upload"], key="eqe_source", horizontal=True)
-    if eqe_source == "Local file" and eqe_files:
-        eqe_selected_list = st.multiselect("Select EQE file(s):", eqe_files, key="eqe_select",
-                                            help="Select one or more EQE files for batch processing")
-        eqe_file_list = [f"resources/eqe data/{f}" for f in eqe_selected_list] if eqe_selected_list else []
+st.sidebar.subheader("EQE data")
+eqe_source = st.sidebar.radio("Source:", ["Local file", "Upload"], key="eqe_source", horizontal=True)
+if eqe_source == "Local file" and eqe_files:
+    eqe_selected_list = st.sidebar.multiselect("Select EQE file(s):", eqe_files, key="eqe_select",
+                                        help="Select one or more EQE files for batch processing")
+    eqe_file_list = [f"resources/eqe data/{f}" for f in eqe_selected_list] if eqe_selected_list else []
+else:
+    uploaded_eqe = st.sidebar.file_uploader("Upload EQE data", type=['txt', 'csv', 'dat'],
+                                     accept_multiple_files=True, key="eqe_upload",
+                                     help="Upload one or more EQE files for batch processing")
+    eqe_file_list = uploaded_eqe if uploaded_eqe else []
+
+# Show count of selected files
+if eqe_file_list:
+    st.sidebar.caption(f"{len(eqe_file_list)} EQE file(s) selected")
+
+# Preview button for EQE (only for single file)
+show_eqe_preview = len(eqe_file_list) == 1 and st.sidebar.button("Preview EQE", key="preview_eqe")
+# For compatibility, set eqe_file to first file or None
+eqe_file = eqe_file_list[0] if eqe_file_list else None
+
+st.sidebar.subheader("Generation profile")
+gen_source = st.sidebar.radio("Source:", ["Local file", "Upload"], key="gen_source", horizontal=True)
+if gen_source == "Local file" and gen_files:
+    gen_selected = st.sidebar.selectbox("Select generation file:", [""] + gen_files, key="gen_select")
+    gen_file = f"resources/gen data/{gen_selected}" if gen_selected else None
+else:
+    gen_file = st.sidebar.file_uploader("Upload generation profile", type=['txt', 'csv', 'dat'], key="gen_upload")
+
+    # Show format requirements for uploaded files
+    st.sidebar.info("""
+    📄 **File Format Requirements:**
+    - Header: `x (nm)` followed by wavelengths
+    - Data: `position(nm)` then generation values
+    - Tab or space separated
+    """)
+
+# Preview button (shows preview in main area)
+show_gen_preview = gen_file and st.sidebar.button("Preview generation", key="preview_gen")
+
+st.sidebar.subheader("Incident spectrum")
+sun_source = st.sidebar.radio("Source:", ["Default (Sunspectrum.sp)", "Upload spectrum", "Photon flux file"], key="sun_source")
+is_photon_flux = (sun_source == "Photon flux file")
+if sun_source == "Default (Sunspectrum.sp)":
+    if Path(default_sun_path).exists():
+        sun_file = default_sun_path
+        st.sidebar.success("✓ Using default AM1.5G spectrum")
     else:
-        uploaded_eqe = st.file_uploader("Upload EQE data", type=['txt', 'csv', 'dat'],
-                                         accept_multiple_files=True, key="eqe_upload",
-                                         help="Upload one or more EQE files for batch processing")
-        eqe_file_list = uploaded_eqe if uploaded_eqe else []
-
-    # Show count of selected files
-    if eqe_file_list:
-        st.caption(f"{len(eqe_file_list)} EQE file(s) selected")
-
-    # Preview button for EQE (only for single file)
-    show_eqe_preview = len(eqe_file_list) == 1 and st.button("Preview EQE", key="preview_eqe")
-    # For compatibility, set eqe_file to first file or None
-    eqe_file = eqe_file_list[0] if eqe_file_list else None
-
-with col_upload2:
-    st.subheader("Generation profile")
-    gen_source = st.radio("Source:", ["Local file", "Upload"], key="gen_source", horizontal=True)
-    if gen_source == "Local file" and gen_files:
-        gen_selected = st.selectbox("Select generation file:", [""] + gen_files, key="gen_select")
-        gen_file = f"resources/gen data/{gen_selected}" if gen_selected else None
-    else:
-        gen_file = st.file_uploader("Upload generation profile", type=['txt', 'csv', 'dat'], key="gen_upload")
-
-        # Show format requirements for uploaded files
-        st.info("""
-        📄 **File Format Requirements:**
-        - Header line must contain: `x (nm)` followed by wavelengths
-        - Wavelengths format: `360 nm  370 nm  380 nm  ...`
-        - Data columns: `position(nm)` then generation values
-        - Tab or space separated
-        - Example:
-        ```
-        # Charge generation [cm^-3*s^-1]
-        # Column format:
-        # x (nm)  360 nm  370 nm  380 nm  ...
-        0.0  4.678e19  5.104e19  5.442e19  ...
-        10.0 3.526e19  3.845e19  4.088e19  ...
-        ...
-        ```
-        """)
-
-    # Preview button (shows preview outside columns)
-    show_gen_preview = gen_file and st.button("Preview generation", key="preview_gen")
-
-with col_upload3:
-    st.subheader("Incident spectrum / Photon flux")
-    sun_source = st.radio("Source:", ["Default (Sunspectrum.sp)", "Upload spectrum", "Photon flux file"], key="sun_source", horizontal=True)
-    is_photon_flux = (sun_source == "Photon flux file")
-    if sun_source == "Default (Sunspectrum.sp)":
-        if Path(default_sun_path).exists():
-            sun_file = default_sun_path
-            st.success("✓ Using default AM1.5G spectrum")
-        else:
-            st.error("Default spectrum not found!")
-            sun_file = None
-    elif sun_source == "Upload spectrum":
-        sun_file = st.file_uploader("Upload spectrum", type=['txt', 'csv', 'dat', 'sp'], key="sun_upload")
-    else:
-        sun_file = st.file_uploader("Upload photon flux file", type=['txt', 'csv', 'dat'], key="photon_flux_upload",
-                                    help="File with wavelength [nm] and photon flux [photons/s/cm²]")
-        if sun_file:
-            st.info("📊 Using photon flux directly (no spectrum conversion)")
+        st.sidebar.error("Default spectrum not found!")
+        sun_file = None
+elif sun_source == "Upload spectrum":
+    sun_file = st.sidebar.file_uploader("Upload spectrum", type=['txt', 'csv', 'dat', 'sp'], key="sun_upload")
+else:
+    sun_file = st.sidebar.file_uploader("Upload photon flux file", type=['txt', 'csv', 'dat'], key="photon_flux_upload",
+                                help="File with wavelength [nm] and photon flux [photons/s/cm²]")
+    if sun_file:
+        st.sidebar.info("📊 Using photon flux directly")
 
 # Display EQE preview (full width outside columns)
 if 'show_eqe_preview' in locals() and show_eqe_preview and eqe_file:
@@ -948,115 +1160,129 @@ if TMM_AVAILABLE:
     st.markdown("---")
     generation_profile_creator()
 
-st.markdown("---")
-st.header("⚙️ Settings")
+# --- Sidebar: Settings ---
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ Settings")
 
-# Row 1: Boundaries and regularization range
-col1, col2, col3, col4, col5 = st.columns(5)
-with col1:
+# Row 1: Boundaries
+sb_col1, sb_col2 = st.sidebar.columns(2)
+with sb_col1:
     x1 = st.number_input("x1 (nm)", value=10, min_value=0, help="Front CTL boundary")
-with col2:
+with sb_col2:
     x2 = st.number_input("x2 (nm)", value=550, min_value=0, help="Back CTL boundary")
-with col3:
+
+# Row 2: Alpha range
+sb_col3, sb_col4, sb_col5 = st.sidebar.columns(3)
+with sb_col3:
     alpha_min = st.number_input("log₁₀(α) min", value=0, help="Min regularization strength")
-with col4:
+with sb_col4:
     alpha_max = st.number_input("log₁₀(α) max", value=14, help="Max regularization strength")
-with col5:
+with sb_col5:
     n_alphas = st.number_input("# alphas", value=1000, min_value=100, max_value=2000, help="Alpha values to test")
 
-# Row 2: Processing options
-col_opt1, col_opt2, col_opt3, col_opt4, col_opt5 = st.columns(5)
-with col_opt1:
-    use_white = st.checkbox("White light", value=True, help="Override with flat spectrum (enable for white light generation profiles)")
-with col_opt2:
-    use_clipping = st.checkbox("Clip 0-1", value=True, help="Constrain SCE to 0-1 range")
-with col_opt3:
-    use_bounded_opt = st.checkbox("Bounded opt", value=False, help="Use 0-1 constrained optimization (slower)")
-with col_opt4:
-    use_second_derivative = st.checkbox("2nd deriv.", value=False, help="Use 2nd derivative regularization (curvature) instead of 1st (slope)")
-    use_first_derivative = not use_second_derivative  # Flip logic: default is 1st derivative
-with col_opt5:
-    n_splits = st.selectbox("CV folds", [3, 4, 5, 6, 7, 8, 9, 10], index=2, help="Cross-validation folds")
+# Processing options (stacked vertically in sidebar)
+st.sidebar.markdown("**Processing options**")
+use_white = st.sidebar.checkbox("White light", value=True, help="Override with flat spectrum (enable for white light generation profiles)")
+use_weighted_avg = st.sidebar.checkbox("Weighted avg", value=False, help="Use 1/MSE weighted averaging instead of CV optimal (incompatible with clipping)")
+use_clipping = st.sidebar.checkbox("Clip 0-1", value=not use_weighted_avg, disabled=use_weighted_avg,
+                           help="Constrain SCE to 0-1 range" + (" (disabled with weighted avg)" if use_weighted_avg else ""))
+use_bounded_opt = st.sidebar.checkbox("Bounded opt", value=False, disabled=use_weighted_avg,
+                              help="Use 0-1 constrained optimization" + (" (disabled with weighted avg)" if use_weighted_avg else ""))
+use_second_derivative = st.sidebar.checkbox("2nd deriv.", value=False, help="Use 2nd derivative regularization (curvature) instead of 1st (slope)")
+use_first_derivative = not use_second_derivative  # Flip logic: default is 1st derivative
+n_splits = st.sidebar.selectbox("CV folds", [3, 4, 5, 6, 7, 8, 9, 10], index=2, help="Cross-validation folds")
 
-# Row 3: Optional features
-col_filt, col_weight = st.columns(2)
+# Override clipping settings when weighted averaging is enabled
+if use_weighted_avg:
+    use_clipping = False
+    use_bounded_opt = False
 
-with col_filt:
-    use_wavelength_filter = st.checkbox("Restrict λ range", value=False, help="Limit analysis to wavelength range")
-    if use_wavelength_filter:
-        wl_c1, wl_c2 = st.columns(2)
-        with wl_c1:
-            wl_min = st.number_input("λ min", value=400, min_value=300, max_value=1200)
-        with wl_c2:
-            wl_max = st.number_input("λ max", value=800, min_value=300, max_value=1200)
+# Weighted averaging settings (only show when enabled)
+if use_weighted_avg:
+    st.sidebar.markdown("**Weighted Averaging Settings:**")
+    sb_wa1, sb_wa2 = st.sidebar.columns(2)
+    with sb_wa1:
+        sce_bounds_min = st.number_input("SCE min", value=-0.001, format="%.3f",
+                                         help="Lower bound for valid SCE (with numerical tolerance)")
+    with sb_wa2:
+        sce_bounds_max = st.number_input("SCE max", value=1.001, format="%.3f",
+                                         help="Upper bound for valid SCE (with numerical tolerance)")
+    sb_wa3, sb_wa4 = st.sidebar.columns(2)
+    with sb_wa3:
+        mse_saturation_factor = st.number_input("MSE factor", value=10.0, format="%.1f",
+                                                help="Check saturation after MSE > factor × min_MSE")
+    with sb_wa4:
+        mse_deriv_threshold = st.number_input("Deriv. threshold", value=0.01,
+                                              format="%.3f", help="Saturation when |d(log MSE)/d(log α)| < threshold")
+    use_cv_for_mse = st.sidebar.checkbox("Use CV for MSE", value=True,
+                                 help="Use k-fold CV to compute MSE (more robust to overfitting)")
+else:
+    sce_bounds_min, sce_bounds_max = -0.001, 1.001
+    mse_saturation_factor, mse_deriv_threshold = 10.0, 0.01
+    use_cv_for_mse = True
+
+# Optional features
+use_wavelength_filter = st.sidebar.checkbox("Restrict λ range", value=False, help="Limit analysis to wavelength range")
+if use_wavelength_filter:
+    sb_wl1, sb_wl2 = st.sidebar.columns(2)
+    with sb_wl1:
+        wl_min = st.number_input("λ min", value=400, min_value=300, max_value=1200)
+    with sb_wl2:
+        wl_max = st.number_input("λ max", value=800, min_value=300, max_value=1200)
+else:
+    wl_min, wl_max = None, None
+
+use_weighted_fitting = st.sidebar.checkbox("Weighted fitting", value=False, help="Prioritize a wavelength region")
+if use_weighted_fitting:
+    sb_w1, sb_w2 = st.sidebar.columns(2)
+    with sb_w1:
+        weight_wl_min = st.number_input("Weight λ min", value=430, min_value=300, max_value=1200)
+    with sb_w2:
+        weight_wl_max = st.number_input("Weight λ max", value=445, min_value=300, max_value=1200)
+    weight_factor = st.sidebar.number_input("Factor", value=10.0, min_value=1.0, max_value=1000000.0)
+else:
+    weight_wl_min, weight_wl_max, weight_factor = None, None, None
+
+# Bounds screening (standalone option, incompatible with weighted averaging)
+if not use_weighted_avg:
+    screen_out_of_bounds = st.sidebar.checkbox("Screen by bounds", value=False,
+                                       help="Exclude solutions with SCE outside bounds from CV optimal search")
+    if screen_out_of_bounds:
+        sb_sc1, sb_sc2 = st.sidebar.columns(2)
+        with sb_sc1:
+            screen_bounds_min = st.number_input("SCE min", value=-0.001, format="%.3f", key="screen_min",
+                                               help="Lower bound for valid SCE")
+        with sb_sc2:
+            screen_bounds_max = st.number_input("SCE max", value=1.001, format="%.3f", key="screen_max",
+                                               help="Upper bound for valid SCE")
     else:
-        wl_min, wl_max = None, None
+        screen_bounds_min, screen_bounds_max = -0.001, 1.001
+else:
+    screen_out_of_bounds = False
+    screen_bounds_min, screen_bounds_max = -0.001, 1.001
 
-with col_weight:
-    use_weighted_fitting = st.checkbox("Weighted fitting", value=False, help="Prioritize a wavelength region")
-    if use_weighted_fitting:
-        w_c1, w_c2, w_c3 = st.columns(3)
-        with w_c1:
-            weight_wl_min = st.number_input("Weight λ min", value=430, min_value=300, max_value=1200)
-        with w_c2:
-            weight_wl_max = st.number_input("Weight λ max", value=445, min_value=300, max_value=1200)
-        with w_c3:
-            weight_factor = st.number_input("Factor", value=10.0, min_value=1.0, max_value=1000000.0)
+# Clipping penalty (only relevant when Clip 0-1 is enabled and not screening)
+if use_clipping and not use_bounded_opt and not screen_out_of_bounds:
+    use_clipping_penalty = st.sidebar.checkbox("Clipping penalty", value=False,
+                                       help="Penalize solutions that need clipping (pushes CV toward higher α)")
+    if use_clipping_penalty:
+        clipping_penalty_weight = st.sidebar.number_input("Penalty weight", value=1.0, min_value=0.01, step=0.1, format="%.2f",
+                                                  help="Higher = stronger push toward solutions within [0,1]")
     else:
-        weight_wl_min, weight_wl_max, weight_factor = None, None, None
-
-# Row 4: Clipping penalty (only relevant when Clip 0-1 is enabled)
-if use_clipping and not use_bounded_opt:
-    col_clip_pen, col_clip_weight = st.columns([1, 1])
-    with col_clip_pen:
-        use_clipping_penalty = st.checkbox("Clipping penalty", value=False,
-                                           help="Penalize solutions that need clipping (pushes CV toward higher α with more physical solutions)")
-    with col_clip_weight:
-        if use_clipping_penalty:
-            clipping_penalty_weight = st.number_input("Penalty weight", value=1.0, min_value=0.01, step=0.1, format="%.2f",
-                                                      help="Higher = stronger push toward solutions that stay within [0,1] naturally")
-        else:
-            clipping_penalty_weight = 0.0
+        clipping_penalty_weight = 0.0
 else:
     use_clipping_penalty = False
     clipping_penalty_weight = 0.0
 
-# Row 5: Oscillation penalty
-col_osc_pen, col_osc_thresh, col_osc_weight = st.columns([1, 1, 1])
-with col_osc_pen:
-    use_oscillation_penalty = st.checkbox("Oscillation penalty", value=False,
-                                          help="Penalize solutions with many direction changes (peaks/valleys)")
-with col_osc_thresh:
-    if use_oscillation_penalty:
-        oscillation_threshold = st.number_input("Allowed oscillations", value=4, min_value=0, max_value=20,
-                                                help="Number of direction changes allowed before penalizing (e.g., 4 allows low-high-low-high-low)")
-    else:
-        oscillation_threshold = 0
-with col_osc_weight:
-    if use_oscillation_penalty:
-        oscillation_penalty_weight = st.number_input("Osc. penalty weight", value=1e-5, min_value=1e-8, max_value=1.0,
-                                                     step=1e-6, format="%.2e",
-                                                     help="Penalty per excess direction change beyond threshold.")
-    else:
-        oscillation_penalty_weight = 0.0
+# Oscillation penalty disabled - set defaults
+use_oscillation_penalty = False
+oscillation_threshold = 0
+oscillation_penalty_weight = 0.0
 
-# Batch mode option (only show when multiple EQE files selected)
-if len(eqe_file_list) > 1:
-    use_same_alpha = st.checkbox(
-        "Use same α for all files",
-        value=False,
-        help="Find optimal α from first file and apply to all. Enables α slider for comparison."
-    )
-else:
-    use_same_alpha = False
-
-st.markdown("---")
-col_btn1, col_btn2 = st.columns(2)
-with col_btn1:
-    run_analysis = st.button("Run Analysis", type="primary", use_container_width=True)
-with col_btn2:
-    if st.button("Open Manual Fitting", type="secondary", use_container_width=True):
-        st.session_state.manual_fitting_open = True
+st.sidebar.markdown("---")
+run_analysis = st.sidebar.button("Run Analysis", type="primary", use_container_width=True)
+if st.sidebar.button("Open Manual Fitting", type="secondary", use_container_width=True):
+    st.session_state.manual_fitting_open = True
 
 # Manual Fitting Section (right below buttons)
 if st.session_state.get('manual_fitting_open', False) and eqe_file and gen_file and sun_file:
@@ -1135,7 +1361,8 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
             st.stop()
 
     # Process each EQE file
-    shared_alpha = None  # Will be set if use_same_alpha is True
+    use_same_alpha = False  # Feature removed - each file uses its own optimal alpha
+    shared_alpha = None
     alphas = np.logspace(alpha_min, alpha_max, n_alphas)
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
 
@@ -1179,8 +1406,52 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
             X_weighted = X * sqrt_weights[:, np.newaxis]
             y_weighted = y * sqrt_weights
 
-            # Cross-validation for optimal alpha
-            if use_same_alpha and shared_alpha is not None:
+            # Weighted averaging mode vs CV mode
+            if use_weighted_avg:
+                # Use weighted MSE averaging approach
+                if is_batch:
+                    progress_text = st.empty()
+                    progress_text.text(f"Computing weighted average for {file_name}...")
+                progress_bar = st.progress(0)
+
+                # Run weighted averaging with progress callback
+                wa_result = weighted_mse_averaging(
+                    X_weighted, y_weighted, L, alphas,
+                    sce_bounds_min=sce_bounds_min,
+                    sce_bounds_max=sce_bounds_max,
+                    mse_saturation_factor=mse_saturation_factor,
+                    mse_deriv_threshold=mse_deriv_threshold,
+                    use_cv=use_cv_for_mse,
+                    n_splits=n_splits,
+                    progress_callback=lambda p: progress_bar.progress(p)
+                )
+                progress_bar.empty()
+                if is_batch and 'progress_text' in dir():
+                    progress_text.empty()
+
+                if wa_result.get('error'):
+                    st.error(f"{file_name}: {wa_result['error']}")
+                    continue
+
+                best_alpha = wa_result['best_alpha']
+                # Convert all_mse array to dict format for compatibility
+                mse = {a: wa_result['all_mse'][i] for i, a in enumerate(alphas)}
+                mse_pure = mse.copy()
+                penalty_values = {a: 0.0 for a in alphas}
+                oscillation_values = {a: 0.0 for a in alphas}
+
+                # Store weighted averaging specific results
+                wa_results = wa_result
+
+                n_avg = wa_result.get('n_averaged', 0)
+                st.success(f"**{file_name}**: CV optimal α = {best_alpha:.2e}, "
+                          f"Averaged {n_avg} solutions (α: {wa_result['passing_alphas'].min():.2e} to {wa_result['saturation_alpha']:.2e})")
+
+                wa_results = wa_result  # Store for later use
+
+            # Cross-validation for optimal alpha (standard mode)
+            elif use_same_alpha and shared_alpha is not None:
+                wa_results = None  # Not using weighted averaging
                 # Use the shared alpha from first file
                 best_alpha = shared_alpha
                 mse = {}
@@ -1225,10 +1496,19 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                 mse = {}  # Combined score (MSE + penalty) or just MSE if no penalty
                 mse_pure = {}  # Pure MSE without penalty
                 penalty_values = {}  # Clipping penalty values
-
                 oscillation_values = {}  # Oscillation penalty values
+                oob_mask = {}  # Out-of-bounds mask for screening
 
                 for idx, a in enumerate(alphas):
+                    # Check if solution is in-bounds (for screening mode)
+                    if screen_out_of_bounds:
+                        # Fit on full data to check bounds
+                        m_full = CustomRidgeDirect(alpha=a, L=L, constraint=False, use_bounded=False)
+                        m_full.fit(X_weighted, y_weighted)
+                        sce_full = m_full.coef_
+                        is_out_of_bounds = np.any(sce_full < screen_bounds_min) or np.any(sce_full > screen_bounds_max)
+                        oob_mask[a] = is_out_of_bounds
+
                     fold_mse_list = []
                     fold_penalty_list = []
                     fold_oscillation_list = []
@@ -1271,7 +1551,17 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                     mse[a] = mse_pure[a] + clipping_penalty_weight * penalty_values[a] + oscillation_penalty_weight * oscillation_values[a]
                     progress_bar.progress((idx + 1) / len(alphas))
 
-                best_alpha = min(mse, key=mse.get)
+                # Find best alpha (screening out-of-bounds if enabled)
+                if screen_out_of_bounds:
+                    # Only consider in-bounds solutions
+                    in_bounds_mse = {a: m for a, m in mse.items() if not oob_mask.get(a, False)}
+                    if in_bounds_mse:
+                        best_alpha = min(in_bounds_mse, key=in_bounds_mse.get)
+                    else:
+                        st.warning(f"{file_name}: No solutions within [0,1] bounds. Using minimum MSE alpha.")
+                        best_alpha = min(mse, key=mse.get)
+                else:
+                    best_alpha = min(mse, key=mse.get)
                 progress_bar.empty()
                 if is_batch and 'progress_text' in dir():
                     progress_text.empty()
@@ -1280,6 +1570,8 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                 if use_same_alpha and shared_alpha is None:
                     shared_alpha = best_alpha
                     st.info(f"Using α = {shared_alpha:.2e} from {file_name} for all files")
+
+                wa_results = None  # Not using weighted averaging
 
             # Store results for this file
             batch_results[file_name] = {
@@ -1298,13 +1590,15 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                 'mse_pure': mse_pure,
                 'penalty_values': penalty_values,
                 'oscillation_values': oscillation_values,
+                'oob_mask': oob_mask if 'oob_mask' in dir() else {},  # Out-of-bounds mask for screening
                 'best_alpha': best_alpha,
                 'alphas': alphas,
                 'eqe_original_wavelengths': eqe_original_wavelengths,
                 'eqe_original_values': eqe_original_values,
+                'wa_results': wa_results,  # Weighted averaging results (None if not used)
             }
 
-            if not is_batch:
+            if not is_batch and not use_weighted_avg:
                 weight_str = f" (weighted: {weight_wl_min}-{weight_wl_max} nm, {weight_factor}×)" if weight_factor is not None else ""
                 st.success(f"Optimal alpha: **{best_alpha:.2e}** (CV score: {mse[best_alpha]:.2e}){weight_str}")
 
@@ -1326,11 +1620,20 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
     st.session_state.weight_wl_min_used = weight_wl_min
     st.session_state.weight_wl_max_used = weight_wl_max
     st.session_state.weight_factor_used = weight_factor
+    st.session_state.screen_out_of_bounds = screen_out_of_bounds
+    st.session_state.screen_bounds_min = screen_bounds_min
+    st.session_state.screen_bounds_max = screen_bounds_max
     st.session_state.use_clipping_penalty = use_clipping_penalty
     st.session_state.clipping_penalty_weight = clipping_penalty_weight
     st.session_state.use_oscillation_penalty = use_oscillation_penalty
     st.session_state.oscillation_penalty_weight = oscillation_penalty_weight
     st.session_state.oscillation_threshold = oscillation_threshold
+    st.session_state.use_weighted_avg = use_weighted_avg
+    st.session_state.sce_bounds_min = sce_bounds_min
+    st.session_state.sce_bounds_max = sce_bounds_max
+    st.session_state.mse_saturation_factor = mse_saturation_factor
+    st.session_state.mse_deriv_threshold = mse_deriv_threshold
+    st.session_state.use_cv_for_mse = use_cv_for_mse
     # For backward compatibility with single file
     if not is_batch and batch_results:
         first_result = list(batch_results.values())[0]
@@ -1352,6 +1655,8 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
         st.session_state.X_weighted = first_result['X_weighted']
         st.session_state.y_weighted = first_result['y_weighted']
         st.session_state.sample_weights = first_result['sample_weights']
+        st.session_state.oob_mask = first_result.get('oob_mask', {})
+        st.session_state.wa_results = first_result.get('wa_results', None)
 
     if is_batch:
         st.success(f"Batch processing complete: {len(batch_results)} files processed")
@@ -1414,38 +1719,62 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
 
         # Compute SCE for each file
         sce_profiles = {}
-        for file_name, result in batch_results.items():
-            # Determine which alpha to use
-            if use_same_alpha_mode and current_alpha is not None:
-                alpha_to_use = current_alpha
-            else:
-                alpha_to_use = result['best_alpha']
+        # Check if weighted averaging mode was used
+        use_weighted_avg_batch = st.session_state.get('use_weighted_avg', False)
 
-            # Fit on full data for the main SCE profile
-            model = CustomRidgeDirect(
-                alpha=alpha_to_use,
-                L=result['L'],
-                constraint=use_clipping,
-                use_bounded=use_bounded_opt
-            )
-            model.fit(result['X_weighted'], result['y_weighted'])
-            sce_profiles[file_name] = model.coef_
+        for file_name, result in batch_results.items():
+            wa_result = result.get('wa_results')
+
+            # Determine which alpha to use and get SCE profile
+            if use_weighted_avg_batch and wa_result is not None and wa_result.get('sce_avg') is not None:
+                # Use weighted average SCE
+                sce_profile = wa_result['sce_avg']
+                alpha_to_use = result['best_alpha']
+                sce_std = wa_result.get('sce_std')
+            else:
+                # Standard mode: fit with specific alpha
+                if use_same_alpha_mode and current_alpha is not None:
+                    alpha_to_use = current_alpha
+                else:
+                    alpha_to_use = result['best_alpha']
+
+                model = CustomRidgeDirect(
+                    alpha=alpha_to_use,
+                    L=result['L'],
+                    constraint=use_clipping,
+                    use_bounded=use_bounded_opt
+                )
+                model.fit(result['X_weighted'], result['y_weighted'])
+                sce_profile = model.coef_
+                sce_std = None
+
+            sce_profiles[file_name] = sce_profile
 
             # Calculate Jsc
             total_gen = trapz_func(result['gen_filtered'], result['lam'], axis=1)
-            collected_gen = model.coef_ * total_gen
+            collected_gen = sce_profile * total_gen
             jsc = trapz_func(collected_gen, result['pos']) * 1.602e-19 * 1e-7 * 1000  # mA/cm²
 
-            # Calculate MSE for current alpha
-            y_fit = model.predict(result['X'])
+            # Calculate MSE
+            y_fit = result['X'] @ sce_profile
             current_mse = np.mean((result['y'] - y_fit)**2)
 
-            summary_data.append({
-                'File': file_name,
-                'α used': f"{alpha_to_use:.2e}",
-                'MSE': f"{current_mse:.2e}",
-                'Jsc (mA/cm²)': f"{jsc:.2f}"
-            })
+            if use_weighted_avg_batch and wa_result is not None:
+                n_avg = wa_result.get('n_averaged', 0)
+                summary_data.append({
+                    'File': file_name,
+                    'CV opt α': f"{alpha_to_use:.2e}",
+                    '# Averaged': n_avg,
+                    'Avg MSE': f"{current_mse:.2e}",
+                    'Jsc (mA/cm²)': f"{jsc:.2f}"
+                })
+            else:
+                summary_data.append({
+                    'File': file_name,
+                    'α used': f"{alpha_to_use:.2e}",
+                    'MSE': f"{current_mse:.2e}",
+                    'Jsc (mA/cm²)': f"{jsc:.2f}"
+                })
 
         # Display summary table
         st.dataframe(summary_data, use_container_width=True)
@@ -1469,11 +1798,101 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             mse = result['mse']
             mse_pure = result.get('mse_pure', mse)  # Fall back to mse if mse_pure not available
             best_alpha = result['best_alpha']
+            wa_result = result.get('wa_results')
 
             alphas_plot = [a for a in file_alphas if a in mse]
 
+            # Weighted averaging mode visualization
+            if use_weighted_avg_batch and wa_result is not None:
+                mse_values = [mse[a] for a in alphas_plot]
+                wa_bounds_mask = wa_result.get('bounds_mask', np.ones(len(file_alphas), dtype=bool))
+                wa_final_mask = wa_result.get('final_mask', np.zeros(len(file_alphas), dtype=bool))
+
+                # Plot out-of-bounds points (grey)
+                out_of_bounds_mask = ~wa_bounds_mask[:len(alphas_plot)]
+                if np.any(out_of_bounds_mask):
+                    oob_alphas = np.array(alphas_plot)[out_of_bounds_mask]
+                    oob_mse = np.array(mse_values)[out_of_bounds_mask]
+                    fig_cv.add_trace(go.Scatter(
+                        x=oob_alphas,
+                        y=oob_mse,
+                        mode='markers',
+                        name=f'{file_name} (out of bounds)',
+                        marker=dict(color='lightgray', size=4),
+                        showlegend=False,
+                        hovertemplate=f'{file_name} (out of bounds)<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
+                    ))
+
+                # Plot in-bounds but not averaged (hollow circles)
+                in_bounds_not_avg = wa_bounds_mask[:len(alphas_plot)] & ~wa_final_mask[:len(alphas_plot)]
+                if np.any(in_bounds_not_avg):
+                    ib_alphas = np.array(alphas_plot)[in_bounds_not_avg]
+                    ib_mse = np.array(mse_values)[in_bounds_not_avg]
+                    fig_cv.add_trace(go.Scatter(
+                        x=ib_alphas,
+                        y=ib_mse,
+                        mode='markers',
+                        name=f'{file_name} (in bounds)',
+                        marker=dict(color=color, size=5, symbol='circle-open'),
+                        showlegend=False,
+                        hovertemplate=f'{file_name} (in bounds, not averaged)<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
+                    ))
+
+                # Plot MSE curve through in-bounds points
+                ib_mask = wa_bounds_mask[:len(alphas_plot)]
+                ib_all_alphas = np.array(alphas_plot)[ib_mask]
+                ib_all_mse = np.array(mse_values)[ib_mask]
+                if len(ib_all_alphas) > 0:
+                    fig_cv.add_trace(go.Scatter(
+                        x=ib_all_alphas,
+                        y=ib_all_mse,
+                        mode='lines',
+                        name=f'{file_name}',
+                        line=dict(color=color, width=1.5),
+                        hovertemplate=f'{file_name}<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
+                    ))
+
+                # Highlight averaged range (filled circles)
+                avg_mask = wa_final_mask[:len(alphas_plot)]
+                avg_alphas = np.array(alphas_plot)[avg_mask]
+                avg_mse = np.array(mse_values)[avg_mask]
+                if len(avg_alphas) > 0:
+                    fig_cv.add_trace(go.Scatter(
+                        x=avg_alphas,
+                        y=avg_mse,
+                        mode='markers',
+                        name=f'{file_name} (avg range)',
+                        marker=dict(color=color, size=6),
+                        showlegend=False,
+                        hovertemplate=f'{file_name} (averaged)<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
+                    ))
+
+                # Mark CV optimal
+                fig_cv.add_trace(go.Scatter(
+                    x=[best_alpha],
+                    y=[mse[best_alpha]],
+                    mode='markers',
+                    name=f'{file_name} CV opt',
+                    marker=dict(color=color, size=10, symbol='star'),
+                    showlegend=False,
+                    hovertemplate=f'{file_name} CV opt<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
+                ))
+
+                # Mark weighted average MSE
+                avg_mse_val = wa_result.get('avg_mse')
+                if avg_mse_val is not None:
+                    fig_cv.add_trace(go.Scatter(
+                        x=[best_alpha],
+                        y=[avg_mse_val],
+                        mode='markers',
+                        name=f'{file_name} avg MSE',
+                        marker=dict(color=color, size=10, symbol='diamond'),
+                        showlegend=False,
+                        hovertemplate=f'{file_name} weighted avg<br>MSE: %{{y:.2e}}<extra></extra>'
+                    ))
+
             # If any penalty was used, show both curves
-            if any_penalty_active and mse_pure != mse:
+            elif any_penalty_active and mse_pure != mse:
                 # Pure MSE curve (dashed)
                 mse_pure_values = [mse_pure[a] for a in alphas_plot]
                 fig_cv.add_trace(go.Scatter(
@@ -1495,29 +1914,74 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     line=dict(color=color, width=2),
                     hovertemplate=f'{file_name}<br>α: %{{x:.2e}}<br>CV Score: %{{y:.2e}}<extra></extra>'
                 ))
-            else:
-                # Single MSE curve
-                mse_values = [mse[a] for a in alphas_plot]
-                fig_cv.add_trace(go.Scatter(
-                    x=alphas_plot,
-                    y=mse_values,
-                    mode='lines',
-                    name=file_name,
-                    line=dict(color=color, width=2),
-                    hovertemplate=f'{file_name}<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
-                ))
 
-            # Optimal point marker (only show if not using same alpha with different current)
-            if not use_same_alpha_mode or current_alpha is None:
-                fig_cv.add_trace(go.Scatter(
-                    x=[best_alpha],
-                    y=[mse[best_alpha]],
-                    mode='markers',
-                    name=f'{file_name} optimal',
-                    marker=dict(color=color, size=10, symbol='star'),
-                    showlegend=False,
-                    hovertemplate=f'{file_name} optimal<br>α: %{{x:.2e}}<br>CV Score: %{{y:.2e}}<extra></extra>'
-                ))
+                # Optimal point marker
+                if not use_same_alpha_mode or current_alpha is None:
+                    fig_cv.add_trace(go.Scatter(
+                        x=[best_alpha],
+                        y=[mse[best_alpha]],
+                        mode='markers',
+                        name=f'{file_name} optimal',
+                        marker=dict(color=color, size=10, symbol='star'),
+                        showlegend=False,
+                        hovertemplate=f'{file_name} optimal<br>α: %{{x:.2e}}<br>CV Score: %{{y:.2e}}<extra></extra>'
+                    ))
+            else:
+                # Single MSE curve - check if screening was used
+                screen_oob_batch = st.session_state.get('screen_out_of_bounds', False)
+                file_oob_mask = result.get('oob_mask', {})
+
+                mse_values = [mse[a] for a in alphas_plot]
+
+                if screen_oob_batch and file_oob_mask:
+                    # Show out-of-bounds points in grey
+                    oob_alphas = [a for a in alphas_plot if file_oob_mask.get(a, False)]
+                    oob_mse = [mse[a] for a in oob_alphas]
+                    if oob_alphas:
+                        fig_cv.add_trace(go.Scatter(
+                            x=oob_alphas,
+                            y=oob_mse,
+                            mode='markers',
+                            name=f'{file_name} (out of bounds)',
+                            marker=dict(color='lightgray', size=4),
+                            showlegend=False,
+                            hovertemplate=f'{file_name} (out of bounds)<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
+                        ))
+
+                    # Show in-bounds curve
+                    ib_alphas = [a for a in alphas_plot if not file_oob_mask.get(a, False)]
+                    ib_mse = [mse[a] for a in ib_alphas]
+                    if ib_alphas:
+                        fig_cv.add_trace(go.Scatter(
+                            x=ib_alphas,
+                            y=ib_mse,
+                            mode='lines',
+                            name=file_name,
+                            line=dict(color=color, width=2),
+                            hovertemplate=f'{file_name}<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
+                        ))
+                else:
+                    # Normal MSE curve
+                    fig_cv.add_trace(go.Scatter(
+                        x=alphas_plot,
+                        y=mse_values,
+                        mode='lines',
+                        name=file_name,
+                        line=dict(color=color, width=2),
+                        hovertemplate=f'{file_name}<br>α: %{{x:.2e}}<br>MSE: %{{y:.2e}}<extra></extra>'
+                    ))
+
+                # Optimal point marker (only show if not using same alpha with different current)
+                if not use_same_alpha_mode or current_alpha is None:
+                    fig_cv.add_trace(go.Scatter(
+                        x=[best_alpha],
+                        y=[mse[best_alpha]],
+                        mode='markers',
+                        name=f'{file_name} optimal',
+                        marker=dict(color=color, size=10, symbol='star'),
+                        showlegend=False,
+                        hovertemplate=f'{file_name} optimal<br>α: %{{x:.2e}}<br>CV Score: %{{y:.2e}}<extra></extra>'
+                    ))
 
         # Add current alpha vertical line if using same alpha mode
         if use_same_alpha_mode and current_alpha is not None:
@@ -1529,13 +1993,17 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                                 annotation_text=f"Optimal α = {shared_alpha:.2e}")
 
         # Update title based on options used
-        title_parts = ['Cross-Validation: MSE vs Alpha']
-        if use_clipping_penalty_batch:
-            title_parts.append(f'Clipping Penalty (w={clipping_penalty_weight_batch:.1f})')
-        if use_oscillation_penalty_batch:
-            title_parts.append(f'Osc. Penalty (w={oscillation_penalty_weight_batch:.1e})')
-        plot_title = title_parts[0] + (' (' + ', '.join(title_parts[1:]) + ')' if len(title_parts) > 1 else '')
-        yaxis_title = 'CV Score / MSE' if any_penalty_active else 'Average MSE'
+        if use_weighted_avg_batch:
+            plot_title = 'MSE vs Alpha (Weighted Averaging)'
+            yaxis_title = 'MSE'
+        else:
+            title_parts = ['Cross-Validation: MSE vs Alpha']
+            if use_clipping_penalty_batch:
+                title_parts.append(f'Clipping Penalty (w={clipping_penalty_weight_batch:.1f})')
+            if use_oscillation_penalty_batch:
+                title_parts.append(f'Osc. Penalty (w={oscillation_penalty_weight_batch:.1e})')
+            plot_title = title_parts[0] + (' (' + ', '.join(title_parts[1:]) + ')' if len(title_parts) > 1 else '')
+            yaxis_title = 'CV Score / MSE' if any_penalty_active else 'Average MSE'
 
         fig_cv.update_layout(
             title=dict(text=plot_title, font=dict(size=16, family='Arial Black')),
@@ -1545,7 +2013,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             hovermode='closest',
             height=500,
             showlegend=True,
-            legend=dict(x=0.98, y=0.98, xanchor='right', yanchor='top')
+            legend=dict(yanchor='top', y=1, xanchor='left', x=1.02),
+            margin=dict(r=150)
         )
 
         st.plotly_chart(fig_cv, use_container_width=True)
@@ -1695,7 +2164,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             hovermode='x unified',
             height=600,
             showlegend=True,
-            legend=dict(x=0.02, y=0.02, xanchor='left', yanchor='bottom')
+            legend=dict(yanchor='top', y=1, xanchor='left', x=1.02),
+            margin=dict(r=150)
         )
 
         st.plotly_chart(fig_compare, use_container_width=True)
@@ -1721,10 +2191,18 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 hovertemplate=f'{file_name}<br>λ: %{{x:.1f}} nm<br>EQE: %{{y:.4f}}<extra></extra>'
             ))
 
-            # Fitted EQE from raw SCE
+            # Fitted EQE from SCE profile
             sce_for_fit = sce_profiles_smoothed[file_name] if use_smoothing_batch else sce_profiles_raw[file_name]
             y_fit = result['X'] @ sce_for_fit
-            fit_label = f'{file_name} (smoothed fit)' if use_smoothing_batch else f'{file_name} (fit)'
+
+            # Determine label based on mode
+            if use_weighted_avg_batch:
+                fit_label = f'{file_name} (weighted avg fit)'
+            elif use_smoothing_batch:
+                fit_label = f'{file_name} (smoothed fit)'
+            else:
+                fit_label = f'{file_name} (fit)'
+
             fig_eqe_compare.add_trace(go.Scatter(
                 x=lam,
                 y=y_fit/inc_flux,
@@ -1742,7 +2220,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             hovermode='x unified',
             height=500,
             showlegend=True,
-            legend=dict(x=0.02, y=0.98, xanchor='left', yanchor='top')
+            legend=dict(yanchor='top', y=1, xanchor='left', x=1.02),
+            margin=dict(r=150)
         )
 
         st.plotly_chart(fig_eqe_compare, use_container_width=True)
@@ -1793,13 +2272,32 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     info_lines.append(f"    - Polynomial order: {smooth_poly_batch}")
                 else:
                     info_lines.append(f"    - Smoothing parameter: {spline_smoothing_batch:.4f}")
+            info_lines.append(f"  - Screen by bounds: {screen_out_of_bounds}")
+            if screen_out_of_bounds:
+                info_lines.extend([
+                    f"    - SCE min: {screen_bounds_min}",
+                    f"    - SCE max: {screen_bounds_max}",
+                ])
+            info_lines.append(f"  - Weighted averaging: {use_weighted_avg}")
+            if use_weighted_avg:
+                info_lines.extend([
+                    f"    - SCE bounds min: {sce_bounds_min}",
+                    f"    - SCE bounds max: {sce_bounds_max}",
+                    f"    - MSE sat. factor: {mse_saturation_factor}",
+                    f"    - Deriv. threshold: {mse_deriv_threshold}",
+                    f"    - Use CV for MSE: {use_cv_for_mse}",
+                ])
             info_lines.extend([
                 "",
                 "Results Summary:",
                 "-" * 50,
             ])
             for item in summary_data:
-                info_lines.append(f"{item['File']}: α={item['α used']}, MSE={item['MSE']}, Jsc={item['Jsc (mA/cm²)']} mA/cm²")
+                if 'α used' in item:
+                    info_lines.append(f"{item['File']}: α={item['α used']}, MSE={item['MSE']}, Jsc={item['Jsc (mA/cm²)']} mA/cm²")
+                else:
+                    # Weighted averaging mode
+                    info_lines.append(f"{item['File']}: CV opt α={item['CV opt α']}, # Averaged={item['# Averaged']}, Avg MSE={item['Avg MSE']}, Jsc={item['Jsc (mA/cm²)']} mA/cm²")
 
             zf.writestr("analysis_info.txt", "\n".join(info_lines))
 
@@ -1835,10 +2333,21 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                                header=f'pos(nm)\tSCE (alpha={alpha_used:.2e})')
                 zf.writestr(f"SCE_{safe_file_name}.txt", sce_buffer.getvalue())
 
-                # 2. CV data (alpha vs MSE, and optionally pure MSE)
+                # 2. CV data (alpha vs MSE, and optionally pure MSE, in_bounds)
                 alphas_file = result['alphas']
                 mse_file = result['mse']
                 mse_pure_file = result.get('mse_pure', mse_file)
+
+                # Build in_bounds column from wa_results or oob_mask
+                file_wa = result.get('wa_results', None)
+                file_oob = result.get('oob_mask', {})
+                if file_wa is not None:
+                    wa_bm = file_wa.get('bounds_mask', np.ones(len(alphas_file), dtype=bool))
+                    in_bounds_col = np.array([int(wa_bm[i]) for i in range(len(alphas_file))])
+                elif file_oob:
+                    in_bounds_col = np.array([int(not file_oob.get(a, False)) for a in alphas_file])
+                else:
+                    in_bounds_col = np.ones(len(alphas_file), dtype=int)
 
                 # Check if penalties were active (mse_pure differs from mse)
                 penalties_active_file = any_penalty_active and mse_pure_file != mse_file
@@ -1846,15 +2355,16 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 if penalties_active_file:
                     cv_data = np.column_stack((alphas_file,
                                                [mse_pure_file[a] for a in alphas_file],
-                                               [mse_file[a] for a in alphas_file]))
+                                               [mse_file[a] for a in alphas_file],
+                                               in_bounds_col))
                     cv_buffer = io.StringIO()
-                    np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e\t%.6e',
-                               header=f'alpha\tMSE_pure\tCV_score_combined (optimal_alpha={result["best_alpha"]:.2e})')
+                    np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e\t%.6e\t%d',
+                               header=f'alpha\tMSE_pure\tCV_score_combined\tin_bounds (optimal_alpha={result["best_alpha"]:.2e})')
                 else:
-                    cv_data = np.column_stack((alphas_file, [mse_file[a] for a in alphas_file]))
+                    cv_data = np.column_stack((alphas_file, [mse_file[a] for a in alphas_file], in_bounds_col))
                     cv_buffer = io.StringIO()
-                    np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e',
-                               header=f'alpha\tMSE (optimal_alpha={result["best_alpha"]:.2e})')
+                    np.savetxt(cv_buffer, cv_data, fmt='%.6e\t%.6e\t%d',
+                               header=f'alpha\tMSE\tin_bounds (optimal_alpha={result["best_alpha"]:.2e})')
                 zf.writestr(f"CV_{safe_file_name}.txt", cv_buffer.getvalue())
 
                 # 3. EQE data (original + fit, include both raw and smoothed fits if smoothing enabled)
@@ -1997,17 +2507,33 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         if weight_factor_stored is not None:
             info_cols[col_idx].metric("Weight", f"{weight_wl_min_stored}-{weight_wl_max_stored} nm ({weight_factor_stored}×)")
 
-        # Fit model with current alpha (use weighted data for fitting, unweighted for prediction/display)
-        model_current = CustomRidgeDirect(alpha=current_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
-        model_current.fit(X_weighted, y_weighted)
-        y_fit_current = model_current.predict(X)  # Predict on unweighted X for display
-        sce_current = model_current.coef_
+        # Get weighted averaging results if available
+        use_weighted_avg_stored = st.session_state.get('use_weighted_avg', False)
+        wa_results = st.session_state.get('wa_results', None)
 
-        # Fit model with optimal alpha
-        model_optimal = CustomRidgeDirect(alpha=best_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
-        model_optimal.fit(X_weighted, y_weighted)
-        y_fit_optimal = model_optimal.predict(X)  # Predict on unweighted X for display
-        sce_optimal = model_optimal.coef_
+        if use_weighted_avg_stored and wa_results is not None and wa_results.get('sce_avg') is not None:
+            # Use weighted averaging results
+            sce_optimal = wa_results['sce_avg']
+            sce_optimal_std = wa_results['sce_std']
+            y_fit_optimal = X @ sce_optimal
+
+            # For current alpha, use the SCE from all_sce at the closest alpha
+            alpha_idx = np.argmin(np.abs(alphas - current_alpha))
+            sce_current = wa_results['all_sce'][alpha_idx]
+            y_fit_current = X @ sce_current
+        else:
+            sce_optimal_std = None
+            # Fit model with current alpha (use weighted data for fitting, unweighted for prediction/display)
+            model_current = CustomRidgeDirect(alpha=current_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
+            model_current.fit(X_weighted, y_weighted)
+            y_fit_current = model_current.predict(X)  # Predict on unweighted X for display
+            sce_current = model_current.coef_
+
+            # Fit model with optimal alpha
+            model_optimal = CustomRidgeDirect(alpha=best_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
+            model_optimal.fit(X_weighted, y_weighted)
+            y_fit_optimal = model_optimal.predict(X)  # Predict on unweighted X for display
+            sce_optimal = model_optimal.coef_
 
         # Plot CV curve
         col1, col2 = st.columns(2)
@@ -2081,6 +2607,88 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     title_penalty_parts.append('Oscillation')
                 plot_title = f'Cross-Validation: MSE vs Alpha (with {" & ".join(title_penalty_parts)} Penalty)'
                 yaxis_title = 'CV Score / MSE'
+            elif use_weighted_avg_stored and wa_results is not None:
+                # Weighted averaging mode - show MSE curve with averaging range
+                mse_values = [mse[a] for a in alphas]
+                bounds_mask = wa_results.get('bounds_mask', np.ones(len(alphas), dtype=bool))
+                final_mask = wa_results.get('final_mask', np.zeros(len(alphas), dtype=bool))
+
+                # Plot out-of-bounds points in gray
+                out_of_bounds_alphas = alphas[~bounds_mask]
+                out_of_bounds_mse = np.array(mse_values)[~bounds_mask]
+                if len(out_of_bounds_alphas) > 0:
+                    fig1.add_trace(go.Scatter(
+                        x=out_of_bounds_alphas,
+                        y=out_of_bounds_mse,
+                        mode='markers',
+                        name='Out of bounds',
+                        marker=dict(color='lightgray', size=4),
+                        hovertemplate='Alpha: %{x:.2e}<br>MSE: %{y:.2e}<br>(out of bounds)<extra></extra>'
+                    ))
+
+                # Plot in-bounds points in blue
+                in_bounds_alphas = alphas[bounds_mask]
+                in_bounds_mse = np.array(mse_values)[bounds_mask]
+                fig1.add_trace(go.Scatter(
+                    x=in_bounds_alphas,
+                    y=in_bounds_mse,
+                    mode='markers',
+                    name='In bounds',
+                    marker=dict(color='royalblue', size=5),
+                    hovertemplate='Alpha: %{x:.2e}<br>MSE: %{y:.2e}<extra></extra>'
+                ))
+
+                # Highlight averaging range
+                avg_alphas = alphas[final_mask]
+                avg_mse = np.array(mse_values)[final_mask]
+                if len(avg_alphas) > 0:
+                    fig1.add_trace(go.Scatter(
+                        x=avg_alphas,
+                        y=avg_mse,
+                        mode='markers',
+                        name=f'Averaged (n={len(avg_alphas)})',
+                        marker=dict(color='green', size=7),
+                        hovertemplate='Alpha: %{x:.2e}<br>MSE: %{y:.2e}<br>(included in avg)<extra></extra>'
+                    ))
+
+                # Mark CV optimal (min MSE)
+                fig1.add_trace(go.Scatter(
+                    x=[best_alpha],
+                    y=[mse[best_alpha]],
+                    mode='markers',
+                    name='CV optimal (min MSE)',
+                    marker=dict(color='blue', size=12, symbol='star'),
+                    hovertemplate='CV optimal α: %{x:.2e}<br>MSE: %{y:.2e}<extra></extra>'
+                ))
+
+                # Mark saturation point
+                sat_alpha = wa_results.get('saturation_alpha')
+                if sat_alpha is not None:
+                    sat_idx = np.argmin(np.abs(alphas - sat_alpha))
+                    fig1.add_trace(go.Scatter(
+                        x=[sat_alpha],
+                        y=[mse_values[sat_idx]],
+                        mode='markers',
+                        name='Saturation',
+                        marker=dict(color='purple', size=10, symbol='x'),
+                        hovertemplate='Saturation α: %{x:.2e}<br>MSE: %{y:.2e}<extra></extra>'
+                    ))
+
+                # Mark averaged MSE
+                avg_mse_val = wa_results.get('avg_mse')
+                if avg_mse_val is not None:
+                    fig1.add_trace(go.Scatter(
+                        x=[best_alpha],
+                        y=[avg_mse_val],
+                        mode='markers',
+                        name='Weighted avg MSE',
+                        marker=dict(color='red', size=12, symbol='diamond'),
+                        hovertemplate='Weighted avg MSE: %{y:.2e}<extra></extra>'
+                    ))
+
+                plot_title = 'MSE vs Alpha (Weighted Averaging)'
+                yaxis_title = 'MSE'
+
             else:
                 # Standard single curve
                 mse_values = [mse[a] for a in alphas]
@@ -2126,7 +2734,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 hovermode='closest',
                 height=500,
                 showlegend=True,
-                legend=dict(x=0.98, y=0.98, xanchor='right', yanchor='top')
+                legend=dict(yanchor='top', y=1, xanchor='left', x=1.02),
+                margin=dict(r=150)
             )
 
             st.plotly_chart(fig1, use_container_width=True)
@@ -2155,27 +2764,48 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 hovertemplate='λ: %{x:.1f} nm<br>EQE (interp): %{y:.4f}<extra></extra>'
             ))
 
-            # Optimal fit (light grey background)
-            if abs(current_alpha - best_alpha) / best_alpha > 0.01:
+            # Optimal/weighted avg fit
+            if use_weighted_avg_stored:
+                # When weighted averaging is used, show weighted avg fit
                 fig2.add_trace(go.Scatter(
                     x=lam,
                     y=y_fit_optimal/inc_flux,
                     mode='lines',
-                    name='Optimal α fit',
-                    line=dict(color='lightgray', width=2),
-                    hovertemplate='λ: %{x:.1f} nm<br>EQE (opt): %{y:.4f}<extra></extra>',
-                    opacity=0.5
+                    name='Weighted avg fit',
+                    line=dict(color='darkgreen', width=2.5),
+                    hovertemplate='λ: %{x:.1f} nm<br>EQE (weighted avg): %{y:.4f}<extra></extra>'
                 ))
+                # Also show current alpha fit for comparison
+                fig2.add_trace(go.Scatter(
+                    x=lam,
+                    y=y_fit_current/inc_flux,
+                    mode='lines',
+                    name='Current α fit',
+                    line=dict(color='orange', width=2, dash='dot'),
+                    hovertemplate='λ: %{x:.1f} nm<br>EQE (current α): %{y:.4f}<extra></extra>'
+                ))
+            else:
+                # Standard mode: show optimal alpha fit if different from current
+                if abs(current_alpha - best_alpha) / best_alpha > 0.01:
+                    fig2.add_trace(go.Scatter(
+                        x=lam,
+                        y=y_fit_optimal/inc_flux,
+                        mode='lines',
+                        name='Optimal α fit',
+                        line=dict(color='lightgray', width=2),
+                        hovertemplate='λ: %{x:.1f} nm<br>EQE (opt): %{y:.4f}<extra></extra>',
+                        opacity=0.5
+                    ))
 
-            # Current alpha fit (solid line)
-            fig2.add_trace(go.Scatter(
-                x=lam,
-                y=y_fit_current/inc_flux,
-                mode='lines',
-                name='Current α fit',
-                line=dict(color='darkgreen', width=2.5),
-                hovertemplate='λ: %{x:.1f} nm<br>EQE (current): %{y:.4f}<extra></extra>'
-            ))
+                # Current alpha fit (solid line)
+                fig2.add_trace(go.Scatter(
+                    x=lam,
+                    y=y_fit_current/inc_flux,
+                    mode='lines',
+                    name='Current α fit',
+                    line=dict(color='darkgreen', width=2.5),
+                    hovertemplate='λ: %{x:.1f} nm<br>EQE (current): %{y:.4f}<extra></extra>'
+                ))
 
             fig2.update_layout(
                 title=dict(text='Measured vs Fitted EQE', font=dict(size=16, family='Arial Black')),
@@ -2185,7 +2815,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 hovermode='x unified',
                 height=500,
                 showlegend=True,
-                legend=dict(x=0.02, y=0.02, xanchor='left', yanchor='bottom')
+                legend=dict(yanchor='top', y=1, xanchor='left', x=1.02),
+                margin=dict(r=150)
             )
 
             st.plotly_chart(fig2, use_container_width=True)
@@ -2307,8 +2938,43 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             # Create interactive SCE profile plot with Plotly
             fig3 = go.Figure()
 
-            # Optimal alpha profile (grey, shown when different from current)
-            if abs(current_alpha - best_alpha) / best_alpha > 0.01:
+            # For weighted averaging mode, show the averaged profile with uncertainty band
+            if use_weighted_avg_stored and wa_results is not None and sce_optimal_std is not None:
+                # Uncertainty band (fill between)
+                fig3.add_trace(go.Scatter(
+                    x=np.concatenate([pos, pos[::-1]]),
+                    y=np.concatenate([sce_optimal_raw + sce_optimal_std, (sce_optimal_raw - sce_optimal_std)[::-1]]),
+                    fill='toself',
+                    fillcolor='rgba(255, 0, 0, 0.2)',
+                    line=dict(color='rgba(255,255,255,0)'),
+                    name='Weighted avg ±1σ',
+                    hoverinfo='skip'
+                ))
+
+                # Averaged profile
+                fig3.add_trace(go.Scatter(
+                    x=pos,
+                    y=sce_optimal_raw,
+                    mode='lines',
+                    name=f'Weighted avg (n={wa_results.get("n_averaged", "?")})',
+                    line=dict(color='red', width=3),
+                    hovertemplate='Depth: %{x:.1f} nm<br>SCE (avg): %{y:.4f}<extra></extra>'
+                ))
+
+                # CV optimal profile for comparison (min MSE among in-bounds)
+                cv_opt_idx = np.argmin(np.where(wa_results['bounds_mask'], wa_results['all_mse'], np.inf))
+                sce_cv_opt = wa_results['all_sce'][cv_opt_idx]
+                fig3.add_trace(go.Scatter(
+                    x=pos,
+                    y=sce_cv_opt,
+                    mode='lines',
+                    name=f'CV optimal α={best_alpha:.1e}',
+                    line=dict(color='blue', width=2, dash='dash'),
+                    hovertemplate='Depth: %{x:.1f} nm<br>SCE (CV opt): %{y:.4f}<extra></extra>'
+                ))
+
+            # Standard mode: Optimal alpha profile (grey, shown when different from current)
+            elif abs(current_alpha - best_alpha) / best_alpha > 0.01:
                 line_style = dict(color='gray', width=1, dash='dash') if use_smoothing else dict(color='gray', width=2)
                 fig3.add_trace(go.Scatter(
                     x=pos,
@@ -2372,7 +3038,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 hovermode='x unified',
                 height=600,
                 showlegend=True,
-                legend=dict(x=0.98, y=0.02, xanchor='right', yanchor='bottom')
+                legend=dict(yanchor='top', y=1, xanchor='left', x=1.02),
+                margin=dict(r=150)
             )
 
             st.plotly_chart(fig3, use_container_width=True)
@@ -2483,7 +3150,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     hovermode='x unified',
                     height=600,
                     showlegend=True,
-                    legend=dict(x=0.85, y=0.5, xanchor='right', yanchor='middle')
+                    legend=dict(yanchor='top', y=1, xanchor='left', x=1.08),
+                    margin=dict(r=200)
                 )
 
                 st.plotly_chart(fig4, use_container_width=True)
@@ -2543,7 +3211,24 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             'use_oscillation_penalty': use_oscillation_penalty,
             'oscillation_threshold': oscillation_threshold if use_oscillation_penalty else None,
             'oscillation_penalty_weight': oscillation_penalty_weight if use_oscillation_penalty else None,
+            'screen_out_of_bounds': screen_out_of_bounds,
+            'screen_bounds_min': screen_bounds_min,
+            'screen_bounds_max': screen_bounds_max,
+            'use_weighted_avg': use_weighted_avg,
+            'sce_bounds_min': sce_bounds_min,
+            'sce_bounds_max': sce_bounds_max,
+            'mse_saturation_factor': mse_saturation_factor,
+            'mse_deriv_threshold': mse_deriv_threshold,
+            'use_cv_for_mse': use_cv_for_mse,
         }
+
+        # Build oob_mask for export
+        # In weighted averaging mode, derive from bounds_mask; otherwise use stored oob_mask
+        if use_weighted_avg_stored and wa_results is not None:
+            wa_bounds = wa_results.get('bounds_mask', np.ones(len(alphas), dtype=bool))
+            export_oob_mask = {a: bool(not wa_bounds[i]) for i, a in enumerate(alphas)}
+        else:
+            export_oob_mask = st.session_state.get('oob_mask', {})
 
         # Save All Results button (ZIP with all data)
         zip_buffer = create_results_zip(
@@ -2563,7 +3248,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             gen_filtered=gen_filtered,
             sce_current_smooth=sce_current_smooth if use_smoothing else None,
             settings_info=settings_info,
-            mse_pure=mse_pure
+            mse_pure=mse_pure,
+            oob_mask=export_oob_mask
         )
 
         # Sanitize filename
