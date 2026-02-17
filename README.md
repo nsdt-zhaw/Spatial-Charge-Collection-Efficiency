@@ -88,6 +88,40 @@ streamlit run app.py
 | n-k data (TMM) | Three-column: wavelength, n, k |
 | SCE profile | Two-column: position (nm), SCE value |
 
+## Example Data
+
+The app includes built-in example datasets to get started. Each example requires a specific combination of EQE, generation profile, spectrum, and CTL boundary settings:
+
+### Simulated example (drift-diffusion simulation with known ground-truth SCE)
+
+| Setting | Value |
+|---|---|
+| EQE | `simulated_example_EQE.txt` and/or `simulated_example_EQE_noions.txt` |
+| Generation | `simulated_example_generation.txt` |
+| Spectrum | Photon flux file: `simulated_example_photon_flux.txt` |
+| Boundaries | x1 = 50 nm, x2 = 600 nm |
+| Reference SCE | `simulated_example_SCE.txt` / `simulated_example_SCE_noions.txt` |
+
+The two EQE files compare a device with and without mobile ions, sharing the same generation profile and photon flux spectrum. The reference SCE profiles in `sce data/` provide the ground truth for validation.
+
+### Experimental example 1
+
+| Setting | Value |
+|---|---|
+| EQE | `experimental_EQE_example1.txt` |
+| Generation | `simulated_generation_white_exp_example1.txt` (coherent) or `simulated_generation_white_exp_example1_incoherent.txt` |
+| Spectrum | Default (Sunspectrum.sp) with **White light** enabled |
+| Boundaries | x1 = 0 nm, x2 = 700 nm |
+
+### Experimental example 2
+
+| Setting | Value |
+|---|---|
+| EQE | `experimental_EQE_example2.txt` and/or `experimental_EQE_example2_preconditioned.txt` |
+| Generation | `simulated_generation_white_exp_example2.txt` (coherent) or `simulated_generation_white_exp_example2_incoherent.txt` |
+| Spectrum | Default (Sunspectrum.sp) with **White light** enabled |
+| Boundaries | x1 = 10 nm, x2 = 550 nm |
+
 ## Project Structure
 
 ```
