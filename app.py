@@ -1147,7 +1147,24 @@ with sb_col5:
 st.sidebar.markdown("**Processing options**")
 use_white = st.sidebar.checkbox("White light", value=True, help="Override with flat spectrum (enable for white light generation profiles)")
 use_weighted_avg = st.sidebar.checkbox("Weighted avg", value=False, help="Use 1/MSE weighted averaging instead of CV optimal (incompatible with clipping)")
-use_clipping = st.sidebar.checkbox("Clip 0-1", value=not use_weighted_avg, disabled=use_weighted_avg,
+# Bounds screening (incompatible with weighted averaging, which has its own bounds)
+if not use_weighted_avg:
+    screen_out_of_bounds = st.sidebar.checkbox("Screen by bounds", value=True,
+                                       help="Exclude solutions with SCE outside bounds from CV optimal search")
+    if screen_out_of_bounds:
+        sb_sc1, sb_sc2 = st.sidebar.columns(2)
+        with sb_sc1:
+            screen_bounds_min = st.number_input("SCE min", value=0.0, format="%.3f", key="screen_min",
+                                               help="Lower bound for valid SCE")
+        with sb_sc2:
+            screen_bounds_max = st.number_input("SCE max", value=1.0, format="%.3f", key="screen_max",
+                                               help="Upper bound for valid SCE")
+    else:
+        screen_bounds_min, screen_bounds_max = 0.0, 1.0
+else:
+    screen_out_of_bounds = False
+    screen_bounds_min, screen_bounds_max = -0.001, 1.001
+use_clipping = st.sidebar.checkbox("Clip 0-1", value=False, disabled=use_weighted_avg,
                            help="Constrain SCE to 0-1 range" + (" (disabled with weighted avg)" if use_weighted_avg else ""))
 use_bounded_opt = st.sidebar.checkbox("Bounded opt", value=False, disabled=use_weighted_avg,
                               help="Use 0-1 constrained optimization" + (" (disabled with weighted avg)" if use_weighted_avg else ""))
@@ -1206,23 +1223,8 @@ if use_weighted_fitting:
 else:
     weight_wl_min, weight_wl_max, weight_factor = None, None, None
 
-# Bounds screening (standalone option, incompatible with weighted averaging)
-if not use_weighted_avg:
-    screen_out_of_bounds = st.sidebar.checkbox("Screen by bounds", value=True,
-                                       help="Exclude solutions with SCE outside bounds from CV optimal search")
-    if screen_out_of_bounds:
-        sb_sc1, sb_sc2 = st.sidebar.columns(2)
-        with sb_sc1:
-            screen_bounds_min = st.number_input("SCE min", value=0.0, format="%.3f", key="screen_min",
-                                               help="Lower bound for valid SCE")
-        with sb_sc2:
-            screen_bounds_max = st.number_input("SCE max", value=1.0, format="%.3f", key="screen_max",
-                                               help="Upper bound for valid SCE")
-    else:
-        screen_bounds_min, screen_bounds_max = 0.0, 1.0
-else:
-    screen_out_of_bounds = False
-    screen_bounds_min, screen_bounds_max = -0.001, 1.001
+# Bounds screening defaults (set by UI above, in processing options)
+# When weighted averaging is active, screening is handled by its own bounds
 
 # Clipping penalty disabled - use screen by bounds instead
 use_clipping_penalty = False
@@ -2517,15 +2519,44 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             else:
                 # Standard single curve
                 mse_values = [mse[a] for a in alphas]
+                screen_oob_stored = st.session_state.get('screen_out_of_bounds', False)
+                oob_mask_stored = st.session_state.get('oob_mask', {})
 
-                fig1.add_trace(go.Scatter(
-                    x=alphas,
-                    y=mse_values,
-                    mode='lines',
-                    name='CV Score',
-                    line=dict(color='royalblue', width=2),
-                    hovertemplate='Alpha: %{x:.2e}<br>CV Score: %{y:.2e}<extra></extra>'
-                ))
+                if screen_oob_stored and oob_mask_stored:
+                    # Show out-of-bounds points in gray
+                    oob_alphas = [a for a in alphas if oob_mask_stored.get(a, False)]
+                    oob_mse = [mse[a] for a in oob_alphas]
+                    if oob_alphas:
+                        fig1.add_trace(go.Scatter(
+                            x=oob_alphas,
+                            y=oob_mse,
+                            mode='markers',
+                            name='Out of bounds',
+                            marker=dict(color='lightgray', size=4),
+                            hovertemplate='Alpha: %{x:.2e}<br>MSE: %{y:.2e}<br>(out of bounds)<extra></extra>'
+                        ))
+
+                    # Show in-bounds curve
+                    ib_alphas = [a for a in alphas if not oob_mask_stored.get(a, False)]
+                    ib_mse = [mse[a] for a in ib_alphas]
+                    if ib_alphas:
+                        fig1.add_trace(go.Scatter(
+                            x=ib_alphas,
+                            y=ib_mse,
+                            mode='lines',
+                            name='CV Score (in bounds)',
+                            line=dict(color='royalblue', width=2),
+                            hovertemplate='Alpha: %{x:.2e}<br>CV Score: %{y:.2e}<extra></extra>'
+                        ))
+                else:
+                    fig1.add_trace(go.Scatter(
+                        x=alphas,
+                        y=mse_values,
+                        mode='lines',
+                        name='CV Score',
+                        line=dict(color='royalblue', width=2),
+                        hovertemplate='Alpha: %{x:.2e}<br>CV Score: %{y:.2e}<extra></extra>'
+                    ))
 
                 # Optimal point
                 fig1.add_trace(go.Scatter(
