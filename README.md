@@ -96,7 +96,8 @@ manual_sce_fitting.py   - Manual SCE explorer module
 tmm_generator.py        - Transfer Matrix Method generator (optional)
 resources/
   eqe data/             - Example EQE measurements
-  gen data/             - Example generation profiles
+  gen data/             - Example generation profiles (coherent and incoherent)
+  sce data/             - Reference SCE profiles for validation
   nk data/              - Optical constants for TMM
   Sunspectrum.sp        - AM1.5G solar spectrum
 ```
