@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
-# NumPy 2.0+ uses trapezoid, older versions use trapz
-trapz_func = getattr(np, 'trapezoid', np.trapz)
+# NumPy 2.0+ removed trapz entirely; use trapezoid with fallback
+trapz_func = getattr(np, 'trapezoid', None) or np.trapz
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
