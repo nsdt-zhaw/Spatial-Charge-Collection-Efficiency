@@ -1052,8 +1052,8 @@ else:
 if eqe_file_list:
     st.sidebar.caption(f"{len(eqe_file_list)} EQE file(s) selected")
 
-# Preview button for EQE (only for single file)
-show_eqe_preview = len(eqe_file_list) == 1 and st.sidebar.button("Preview EQE", key="preview_eqe")
+# Preview button for EQE
+show_eqe_preview = len(eqe_file_list) >= 1 and st.sidebar.button("Preview EQE", key="preview_eqe")
 # For compatibility, set eqe_file to first file or None
 eqe_file = eqe_file_list[0] if eqe_file_list else None
 
@@ -1095,11 +1095,44 @@ else:
         st.sidebar.info("📊 Using photon flux directly")
 
 # Display EQE preview (full width outside columns)
-if 'show_eqe_preview' in locals() and show_eqe_preview and eqe_file:
+if 'show_eqe_preview' in locals() and show_eqe_preview and eqe_file_list:
     with st.expander("📊 EQE data preview", expanded=True):
         with st.spinner("Loading preview..."):
-            fig, wls, eqe_vals = preview_eqe_data(eqe_file)
-            if fig is not None:
+            if len(eqe_file_list) == 1:
+                fig, wls, eqe_vals = preview_eqe_data(eqe_file_list[0])
+                if fig is not None:
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                # Batch preview: overlay all EQE files on one plot
+                fig = go.Figure()
+                colors = ['darkblue', 'darkgreen', 'darkred', 'purple', 'orange', 'brown', 'pink', 'gray']
+                for idx, f in enumerate(eqe_file_list):
+                    try:
+                        data = np.loadtxt(f)
+                        wavelengths = data[:, 0]
+                        eqe_values = data[:, 1]
+                        name = Path(f).stem if isinstance(f, str) else f.name.rsplit('.', 1)[0]
+                        fig.add_trace(go.Scatter(
+                            x=wavelengths, y=eqe_values,
+                            mode='lines+markers',
+                            line=dict(color=colors[idx % len(colors)], width=2),
+                            marker=dict(size=3),
+                            name=name,
+                            hovertemplate=f'<b>{name}</b><br>λ: %{{x:.1f}} nm<br>EQE: %{{y:.4f}}<extra></extra>'
+                        ))
+                    except Exception as e:
+                        st.warning(f"Could not load {f}: {e}")
+                fig.update_layout(
+                    title=dict(text='External Quantum Efficiency (EQE)', font=dict(size=18, family='Arial Black')),
+                    xaxis=dict(title='Wavelength (nm)', gridcolor='lightgray'),
+                    yaxis=dict(title='EQE (-)', gridcolor='lightgray'),
+                    template='plotly_white',
+                    hovermode='x unified',
+                    height=400,
+                    plot_bgcolor='white',
+                    legend=dict(yanchor='top', y=1, xanchor='left', x=1.02),
+                    margin=dict(l=60, r=150, t=60, b=60)
+                )
                 st.plotly_chart(fig, use_container_width=True)
 
 # Display generation profile preview (full width outside columns)
