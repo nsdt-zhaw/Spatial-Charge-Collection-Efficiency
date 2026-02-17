@@ -111,6 +111,10 @@ resources/
 - plotly >= 5.17.0
 - tmm >= 0.1.8 (optional, enables the TMM generator)
 
+## Acknowledgments
+
+The Streamlit GUI for this app was built with assistance from [Claude](https://claude.ai) by Anthropic.
+
 ## License
 
 MIT License
