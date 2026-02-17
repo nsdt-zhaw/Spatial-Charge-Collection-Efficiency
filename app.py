@@ -261,31 +261,17 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
             else:  # Smoothing Spline
                 info_lines.append(f"Smoothing parameter: {settings_info.get('spline_smoothing', 'N/A')}")
 
-        # CV Penalty settings
-        info_lines.extend([
-            "",
-            "CV PENALTIES",
-            "-" * 40,
-            f"Clipping penalty:    {settings_info.get('use_clipping_penalty', False)}",
-        ])
-        if settings_info.get('use_clipping_penalty', False):
-            info_lines.append(f"  Weight:            {settings_info.get('clipping_penalty_weight', 0.0)}")
-        info_lines.append(f"Oscillation penalty: {settings_info.get('use_oscillation_penalty', False)}")
-        if settings_info.get('use_oscillation_penalty', False):
-            info_lines.append(f"  Allowed osc.:      {settings_info.get('oscillation_threshold', 0)}")
-            info_lines.append(f"  Weight:            {settings_info.get('oscillation_penalty_weight', 0.0)}")
-
         # Bounds screening settings
         info_lines.extend([
             "",
             "BOUNDS SCREENING",
             "-" * 40,
-            f"Screen by bounds:    {settings_info.get('screen_out_of_bounds', False)}",
+            f"Screen by bounds:    {settings_info.get('screen_out_of_bounds', True)}",
         ])
-        if settings_info.get('screen_out_of_bounds', False):
+        if settings_info.get('screen_out_of_bounds', True):
             info_lines.extend([
-                f"  SCE min:           {settings_info.get('screen_bounds_min', -0.001)}",
-                f"  SCE max:           {settings_info.get('screen_bounds_max', 1.001)}",
+                f"  SCE min:           {settings_info.get('screen_bounds_min', 0.0)}",
+                f"  SCE max:           {settings_info.get('screen_bounds_max', 1.0)}",
             ])
 
         # Weighted averaging settings
@@ -628,29 +614,6 @@ class CustomRidgeDirect(BaseEstimator, RegressorMixin):
         X = check_array(X)
         return X @ self.coef_
 
-
-def compute_clipping_penalty(coef):
-    """Compute penalty for coefficients that violate [0, 1] bounds.
-
-    Only penalizes the amount by which coefficients go *beyond* 0 or 1,
-    not coefficients that are exactly at the boundaries.
-
-    Parameters:
-    -----------
-    coef : array
-        Coefficient values (unconstrained or before clipping)
-
-    Returns:
-    --------
-    penalty : float
-        Mean squared violation per coefficient
-    """
-    # Violation above 1: how much coef exceeds 1
-    upper_violation = np.maximum(0, coef - 1) ** 2
-    # Violation below 0: how much coef goes negative
-    lower_violation = np.maximum(0, -coef) ** 2
-    # Mean penalty per coefficient (normalize by number of points)
-    return np.mean(upper_violation + lower_violation)
 
 
 def compute_oscillation_penalty(coef, threshold=0):
@@ -1245,34 +1208,25 @@ else:
 
 # Bounds screening (standalone option, incompatible with weighted averaging)
 if not use_weighted_avg:
-    screen_out_of_bounds = st.sidebar.checkbox("Screen by bounds", value=False,
+    screen_out_of_bounds = st.sidebar.checkbox("Screen by bounds", value=True,
                                        help="Exclude solutions with SCE outside bounds from CV optimal search")
     if screen_out_of_bounds:
         sb_sc1, sb_sc2 = st.sidebar.columns(2)
         with sb_sc1:
-            screen_bounds_min = st.number_input("SCE min", value=-0.001, format="%.3f", key="screen_min",
+            screen_bounds_min = st.number_input("SCE min", value=0.0, format="%.3f", key="screen_min",
                                                help="Lower bound for valid SCE")
         with sb_sc2:
-            screen_bounds_max = st.number_input("SCE max", value=1.001, format="%.3f", key="screen_max",
+            screen_bounds_max = st.number_input("SCE max", value=1.0, format="%.3f", key="screen_max",
                                                help="Upper bound for valid SCE")
     else:
-        screen_bounds_min, screen_bounds_max = -0.001, 1.001
+        screen_bounds_min, screen_bounds_max = 0.0, 1.0
 else:
     screen_out_of_bounds = False
     screen_bounds_min, screen_bounds_max = -0.001, 1.001
 
-# Clipping penalty (only relevant when Clip 0-1 is enabled and not screening)
-if use_clipping and not use_bounded_opt and not screen_out_of_bounds:
-    use_clipping_penalty = st.sidebar.checkbox("Clipping penalty", value=False,
-                                       help="Penalize solutions that need clipping (pushes CV toward higher α)")
-    if use_clipping_penalty:
-        clipping_penalty_weight = st.sidebar.number_input("Penalty weight", value=1.0, min_value=0.01, step=0.1, format="%.2f",
-                                                  help="Higher = stronger push toward solutions within [0,1]")
-    else:
-        clipping_penalty_weight = 0.0
-else:
-    use_clipping_penalty = False
-    clipping_penalty_weight = 0.0
+# Clipping penalty disabled - use screen by bounds instead
+use_clipping_penalty = False
+clipping_penalty_weight = 0.0
 
 # Oscillation penalty disabled - set defaults
 use_oscillation_penalty = False
@@ -1460,43 +1414,25 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                 oscillation_values = {}
                 # Compute MSE for this file at the shared alpha
                 fold_mse_list = []
-                fold_penalty_list = []
-                fold_oscillation_list = []
                 for tr, val in kf.split(X_weighted):
-                    if use_clipping_penalty and use_clipping:
-                        m = CustomRidgeDirect(alpha=shared_alpha, L=L, constraint=False, use_bounded=False)
-                        m.fit(X_weighted[tr], y_weighted[tr])
-                        unconstrained_coef = m.coef_.copy()
-                        clip_penalty = compute_clipping_penalty(unconstrained_coef)
-                        clipped_coef = np.clip(unconstrained_coef, 0, 1)
-                        y_val_pred = X_weighted[val] @ clipped_coef
-                        fold_mse = mean_squared_error(y_weighted[val], y_val_pred)
-                        fold_mse_list.append(fold_mse)
-                        fold_penalty_list.append(clip_penalty)
-                        if use_oscillation_penalty:
-                            fold_oscillation_list.append(compute_oscillation_penalty(clipped_coef, oscillation_threshold))
-                    else:
-                        m = CustomRidgeDirect(alpha=shared_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
-                        m.fit(X_weighted[tr], y_weighted[tr])
-                        y_val_pred = m.predict(X_weighted[val])
-                        fold_mse_list.append(mean_squared_error(y_weighted[val], y_val_pred))
-                        fold_penalty_list.append(0.0)
-                        if use_oscillation_penalty:
-                            fold_oscillation_list.append(compute_oscillation_penalty(m.coef_, oscillation_threshold))
+                    m = CustomRidgeDirect(alpha=shared_alpha, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
+                    m.fit(X_weighted[tr], y_weighted[tr])
+                    y_val_pred = m.predict(X_weighted[val])
+                    fold_mse_list.append(mean_squared_error(y_weighted[val], y_val_pred))
                 mse_pure[shared_alpha] = np.mean(fold_mse_list)
-                penalty_values[shared_alpha] = np.mean(fold_penalty_list)
-                oscillation_values[shared_alpha] = np.mean(fold_oscillation_list) if fold_oscillation_list else 0.0
-                mse[shared_alpha] = mse_pure[shared_alpha] + clipping_penalty_weight * penalty_values[shared_alpha] + oscillation_penalty_weight * oscillation_values[shared_alpha]
+                penalty_values[shared_alpha] = 0.0
+                oscillation_values[shared_alpha] = 0.0
+                mse[shared_alpha] = mse_pure[shared_alpha]
             else:
                 # Find optimal alpha for this file
                 if is_batch:
                     progress_text = st.empty()
                     progress_text.text(f"Finding optimal α for {file_name}...")
                 progress_bar = st.progress(0)
-                mse = {}  # Combined score (MSE + penalty) or just MSE if no penalty
-                mse_pure = {}  # Pure MSE without penalty
-                penalty_values = {}  # Clipping penalty values
-                oscillation_values = {}  # Oscillation penalty values
+                mse = {}
+                mse_pure = {}
+                penalty_values = {}
+                oscillation_values = {}
                 oob_mask = {}  # Out-of-bounds mask for screening
 
                 for idx, a in enumerate(alphas):
@@ -1510,45 +1446,16 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                         oob_mask[a] = is_out_of_bounds
 
                     fold_mse_list = []
-                    fold_penalty_list = []
-                    fold_oscillation_list = []
                     for tr, val in kf.split(X_weighted):
-                        if use_clipping_penalty and use_clipping:
-                            # Fit without constraint to get unconstrained coefficients
-                            m = CustomRidgeDirect(alpha=a, L=L, constraint=False, use_bounded=False)
-                            m.fit(X_weighted[tr], y_weighted[tr])
-                            unconstrained_coef = m.coef_.copy()
-
-                            # Compute clipping penalty (only on violations, not boundary values)
-                            clip_penalty = compute_clipping_penalty(unconstrained_coef)
-
-                            # Clip for prediction (same behavior as before)
-                            clipped_coef = np.clip(unconstrained_coef, 0, 1)
-                            y_val_pred = X_weighted[val] @ clipped_coef
-
-                            fold_mse = mean_squared_error(y_weighted[val], y_val_pred)
-                            fold_mse_list.append(fold_mse)
-                            fold_penalty_list.append(clip_penalty)
-
-                            # Compute oscillation penalty on clipped coefficients
-                            if use_oscillation_penalty:
-                                fold_oscillation_list.append(compute_oscillation_penalty(clipped_coef, oscillation_threshold))
-                        else:
-                            # Original behavior
-                            m = CustomRidgeDirect(alpha=a, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
-                            m.fit(X_weighted[tr], y_weighted[tr])
-                            y_val_pred = m.predict(X_weighted[val])
-                            fold_mse_list.append(mean_squared_error(y_weighted[val], y_val_pred))
-                            fold_penalty_list.append(0.0)
-
-                            # Compute oscillation penalty
-                            if use_oscillation_penalty:
-                                fold_oscillation_list.append(compute_oscillation_penalty(m.coef_, oscillation_threshold))
+                        m = CustomRidgeDirect(alpha=a, L=L, constraint=use_clipping, use_bounded=use_bounded_opt)
+                        m.fit(X_weighted[tr], y_weighted[tr])
+                        y_val_pred = m.predict(X_weighted[val])
+                        fold_mse_list.append(mean_squared_error(y_weighted[val], y_val_pred))
 
                     mse_pure[a] = np.mean(fold_mse_list)
-                    penalty_values[a] = np.mean(fold_penalty_list)
-                    oscillation_values[a] = np.mean(fold_oscillation_list) if fold_oscillation_list else 0.0
-                    mse[a] = mse_pure[a] + clipping_penalty_weight * penalty_values[a] + oscillation_penalty_weight * oscillation_values[a]
+                    penalty_values[a] = 0.0
+                    oscillation_values[a] = 0.0
+                    mse[a] = mse_pure[a]
                     progress_bar.progress((idx + 1) / len(alphas))
 
                 # Find best alpha (screening out-of-bounds if enabled)
@@ -1623,8 +1530,6 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
     st.session_state.screen_out_of_bounds = screen_out_of_bounds
     st.session_state.screen_bounds_min = screen_bounds_min
     st.session_state.screen_bounds_max = screen_bounds_max
-    st.session_state.use_clipping_penalty = use_clipping_penalty
-    st.session_state.clipping_penalty_weight = clipping_penalty_weight
     st.session_state.use_oscillation_penalty = use_oscillation_penalty
     st.session_state.oscillation_penalty_weight = oscillation_penalty_weight
     st.session_state.oscillation_threshold = oscillation_threshold
@@ -1782,12 +1687,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         # CV comparison plot
         st.subheader("Cross-Validation Comparison")
 
-        # Check if penalties were used
-        use_clipping_penalty_batch = st.session_state.get('use_clipping_penalty', False)
-        clipping_penalty_weight_batch = st.session_state.get('clipping_penalty_weight', 0.0)
-        use_oscillation_penalty_batch = st.session_state.get('use_oscillation_penalty', False)
-        oscillation_penalty_weight_batch = st.session_state.get('oscillation_penalty_weight', 0.0)
-        any_penalty_active = use_clipping_penalty_batch or use_oscillation_penalty_batch
+        use_oscillation_penalty_batch = False
+        any_penalty_active = False
 
         fig_cv = go.Figure()
         colors = ['darkblue', 'darkgreen', 'darkred', 'purple', 'orange', 'brown', 'pink', 'gray']
@@ -1997,13 +1898,8 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             plot_title = 'MSE vs Alpha (Weighted Averaging)'
             yaxis_title = 'MSE'
         else:
-            title_parts = ['Cross-Validation: MSE vs Alpha']
-            if use_clipping_penalty_batch:
-                title_parts.append(f'Clipping Penalty (w={clipping_penalty_weight_batch:.1f})')
-            if use_oscillation_penalty_batch:
-                title_parts.append(f'Osc. Penalty (w={oscillation_penalty_weight_batch:.1e})')
-            plot_title = title_parts[0] + (' (' + ', '.join(title_parts[1:]) + ')' if len(title_parts) > 1 else '')
-            yaxis_title = 'CV Score / MSE' if any_penalty_active else 'Average MSE'
+            plot_title = 'Cross-Validation: MSE vs Alpha'
+            yaxis_title = 'Average MSE'
 
         fig_cv.update_layout(
             title=dict(text=plot_title, font=dict(size=16, family='Arial Black')),
@@ -2261,8 +2157,6 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 f"  - Clipping: {use_clipping}",
                 f"  - Bounded optimization: {use_bounded_opt}",
                 f"  - CV folds: {n_splits}",
-                f"  - Clipping penalty: {use_clipping_penalty_batch}" + (f" (weight={clipping_penalty_weight_batch})" if use_clipping_penalty_batch else ""),
-                f"  - Oscillation penalty: {use_oscillation_penalty_batch}" + (f" (weight={oscillation_penalty_weight_batch:.1e})" if use_oscillation_penalty_batch else ""),
                 f"  - SCE smoothing: {use_smoothing_batch}",
             ])
             if use_smoothing_batch:
@@ -2418,11 +2312,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         mse = st.session_state.mse
         mse_pure = st.session_state.get('mse_pure', mse)  # Fallback to mse if not available
         penalty_values = st.session_state.get('penalty_values', {a: 0 for a in alphas})
-        use_clipping_penalty_stored = st.session_state.get('use_clipping_penalty', False)
-        clipping_penalty_weight_stored = st.session_state.get('clipping_penalty_weight', 0.0)
-        use_oscillation_penalty_stored = st.session_state.get('use_oscillation_penalty', False)
-        oscillation_penalty_weight_stored = st.session_state.get('oscillation_penalty_weight', 0.0)
-        any_penalty_stored = use_clipping_penalty_stored or use_oscillation_penalty_stored
+        any_penalty_stored = False
         best_alpha = st.session_state.best_alpha
         X = st.session_state.X
         y = st.session_state.y
@@ -2542,72 +2432,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             # Create interactive CV plot with Plotly
             fig1 = go.Figure()
 
-            if any_penalty_stored and mse_pure != mse:
-                # Show both pure MSE and combined score
-                mse_pure_values = [mse_pure[a] for a in alphas]
-                mse_combined_values = [mse[a] for a in alphas]
-
-                # Pure MSE curve (dashed)
-                fig1.add_trace(go.Scatter(
-                    x=alphas,
-                    y=mse_pure_values,
-                    mode='lines',
-                    name='Pure MSE',
-                    line=dict(color='gray', width=2, dash='dash'),
-                    hovertemplate='Alpha: %{x:.2e}<br>Pure MSE: %{y:.2e}<extra></extra>'
-                ))
-
-                # Build legend label for combined score
-                penalty_parts = []
-                if use_clipping_penalty_stored:
-                    penalty_parts.append(f'clip:{clipping_penalty_weight_stored:.1f}')
-                if use_oscillation_penalty_stored:
-                    penalty_parts.append(f'osc:{oscillation_penalty_weight_stored:.1e}')
-                penalty_label = ' + '.join(penalty_parts)
-
-                # Combined score curve (solid)
-                fig1.add_trace(go.Scatter(
-                    x=alphas,
-                    y=mse_combined_values,
-                    mode='lines',
-                    name=f'CV Score (MSE + {penalty_label})',
-                    line=dict(color='royalblue', width=2),
-                    hovertemplate='Alpha: %{x:.2e}<br>CV Score: %{y:.2e}<extra></extra>'
-                ))
-
-                # Find optimal based on pure MSE for comparison
-                best_alpha_pure_mse = min(mse_pure, key=mse_pure.get)
-
-                # Optimal point (based on combined score)
-                fig1.add_trace(go.Scatter(
-                    x=[best_alpha],
-                    y=[mse[best_alpha]],
-                    mode='markers',
-                    name='Optimal α (penalized)',
-                    marker=dict(color='red', size=12, symbol='star'),
-                    hovertemplate='Optimal α: %{x:.2e}<br>CV Score: %{y:.2e}<extra></extra>'
-                ))
-
-                # Show where pure MSE would have chosen (if different)
-                if abs(best_alpha_pure_mse - best_alpha) / best_alpha > 0.1:
-                    fig1.add_trace(go.Scatter(
-                        x=[best_alpha_pure_mse],
-                        y=[mse_pure[best_alpha_pure_mse]],
-                        mode='markers',
-                        name='Would-be optimal (no penalty)',
-                        marker=dict(color='gray', size=10, symbol='star-open'),
-                        hovertemplate='Pure MSE optimal α: %{x:.2e}<br>Pure MSE: %{y:.2e}<extra></extra>'
-                    ))
-
-                # Build plot title
-                title_penalty_parts = []
-                if use_clipping_penalty_stored:
-                    title_penalty_parts.append('Clipping')
-                if use_oscillation_penalty_stored:
-                    title_penalty_parts.append('Oscillation')
-                plot_title = f'Cross-Validation: MSE vs Alpha (with {" & ".join(title_penalty_parts)} Penalty)'
-                yaxis_title = 'CV Score / MSE'
-            elif use_weighted_avg_stored and wa_results is not None:
+            if use_weighted_avg_stored and wa_results is not None:
                 # Weighted averaging mode - show MSE curve with averaging range
                 mse_values = [mse[a] for a in alphas]
                 bounds_mask = wa_results.get('bounds_mask', np.ones(len(alphas), dtype=bool))
@@ -3206,11 +3031,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             'smooth_window': smooth_window if use_smoothing and smooth_method == "Savitzky-Golay" else None,
             'smooth_polyorder': smooth_poly if use_smoothing and smooth_method == "Savitzky-Golay" else None,
             'spline_smoothing': spline_smoothing if use_smoothing and smooth_method == "Smoothing Spline" else None,
-            'use_clipping_penalty': use_clipping_penalty,
-            'clipping_penalty_weight': clipping_penalty_weight if use_clipping_penalty else None,
             'use_oscillation_penalty': use_oscillation_penalty,
-            'oscillation_threshold': oscillation_threshold if use_oscillation_penalty else None,
-            'oscillation_penalty_weight': oscillation_penalty_weight if use_oscillation_penalty else None,
             'screen_out_of_bounds': screen_out_of_bounds,
             'screen_bounds_min': screen_bounds_min,
             'screen_bounds_max': screen_bounds_max,
@@ -3265,10 +3086,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             use_container_width=True
         )
 
-        if use_clipping_penalty or use_oscillation_penalty:
-            st.caption("ZIP includes: CV results (pure MSE & combined CV score), EQE data, SCE profiles, generation analysis, and analysis_info.txt with all settings")
-        else:
-            st.caption("ZIP includes: CV results, EQE data, SCE profiles, generation analysis, and analysis_info.txt with all settings")
+        st.caption("ZIP includes: CV results, EQE data, SCE profiles, generation analysis, and analysis_info.txt with all settings")
 
         st.markdown("**Individual downloads:**")
 
