@@ -212,7 +212,7 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
             f"Apply 0-1 clipping:            {settings_info.get('use_clipping', 'N/A')}",
             f"Use bounded optimization:      {settings_info.get('use_bounded', 'N/A')}",
             f"Use 1st derivative reg.:       {settings_info.get('use_first_derivative', 'N/A')}",
-            f"Cross-validation:              {'LOO' if settings_info.get('n_splits') == 'LOO' else f\"{settings_info.get('n_splits', 'N/A')}-fold\"}",
+            f"Cross-validation:              {'LOO' if settings_info.get('n_splits') == 'LOO' else str(settings_info.get('n_splits', 'N/A')) + '-fold'}",
             "",
             "WAVELENGTH FILTER",
             "-" * 40,
