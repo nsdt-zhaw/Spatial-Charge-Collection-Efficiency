@@ -12,7 +12,7 @@ from scipy.signal import savgol_filter
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 from sklearn.metrics import mean_squared_error
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, LeaveOneOut
 import io
 import os
 import zipfile
@@ -212,7 +212,7 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
             f"Apply 0-1 clipping:            {settings_info.get('use_clipping', 'N/A')}",
             f"Use bounded optimization:      {settings_info.get('use_bounded', 'N/A')}",
             f"Use 1st derivative reg.:       {settings_info.get('use_first_derivative', 'N/A')}",
-            f"Cross-validation folds:        {settings_info.get('n_splits', 'N/A')}",
+            f"Cross-validation:              {'LOO' if settings_info.get('n_splits') == 'LOO' else f\"{settings_info.get('n_splits', 'N/A')}-fold\"}",
             "",
             "WAVELENGTH FILTER",
             "-" * 40,
@@ -687,8 +687,8 @@ def weighted_mse_averaging(X, y, L, alphas, sce_bounds_min=-0.001, sce_bounds_ma
         Stop when |d(log MSE)/d(log alpha)| < threshold (default: 0.01)
     use_cv : bool
         If True, use k-fold CV to compute MSE (slower but more robust). Default: False
-    n_splits : int
-        Number of CV folds if use_cv=True. Default: 5
+    n_splits : int or str
+        Number of CV folds if use_cv=True. Use "LOO" for leave-one-out CV. Default: 5
     progress_callback : callable, optional
         Function to call with progress (0-1) for UI updates
 
@@ -713,7 +713,10 @@ def weighted_mse_averaging(X, y, L, alphas, sce_bounds_min=-0.001, sce_bounds_ma
 
     # Set up CV if requested
     if use_cv:
-        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        if n_splits == "LOO":
+            kf = LeaveOneOut()
+        else:
+            kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
 
     # Step 1 & 2: Extract without clipping, screen by physical bounds
     for idx, alpha in enumerate(alphas):
@@ -1203,7 +1206,8 @@ use_bounded_opt = st.sidebar.checkbox("Bounded opt", value=False, disabled=use_w
                               help="Use 0-1 constrained optimization" + (" (disabled with weighted avg)" if use_weighted_avg else ""))
 use_second_derivative = st.sidebar.checkbox("2nd deriv.", value=False, help="Use 2nd derivative regularization (curvature) instead of 1st (slope)")
 use_first_derivative = not use_second_derivative  # Flip logic: default is 1st derivative
-n_splits = st.sidebar.selectbox("CV folds", [3, 4, 5, 6, 7, 8, 9, 10], index=2, help="Cross-validation folds")
+cv_options = [3, 4, 5, 6, 7, 8, 9, 10, "LOO"]
+n_splits = st.sidebar.selectbox("CV folds", cv_options, index=2, help="Cross-validation folds (LOO = Leave-One-Out)")
 
 # Override clipping settings when weighted averaging is enabled
 if use_weighted_avg:
@@ -1353,7 +1357,10 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
     use_same_alpha = False  # Feature removed - each file uses its own optimal alpha
     shared_alpha = None
     alphas = np.logspace(alpha_min, alpha_max, n_alphas)
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    if n_splits == "LOO":
+        kf = LeaveOneOut()
+    else:
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
 
     for file_idx, eqe_file_item in enumerate(eqe_file_list):
         # Get file name for display
@@ -2191,7 +2198,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 f"  - White light: {use_white}",
                 f"  - Clipping: {use_clipping}",
                 f"  - Bounded optimization: {use_bounded_opt}",
-                f"  - CV folds: {n_splits}",
+                f"  - CV: {'LOO' if n_splits == 'LOO' else f'{n_splits}-fold'}",
                 f"  - SCE smoothing: {use_smoothing_batch}",
             ])
             if use_smoothing_batch:
