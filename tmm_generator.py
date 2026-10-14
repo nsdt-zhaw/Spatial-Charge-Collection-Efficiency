@@ -460,7 +460,7 @@ def generation_profile_creator():
             # ================================================================
             with col_up:
                 if display_idx > 0:
-                    if st.button("", key=f"btn_up_{layer_id}", help="Move layer up"):
+                    if st.button("⬆", key=f"btn_up_{layer_id}", help="Move layer up"):
                         # Swap with previous
                         st.session_state.layer_order[display_idx], st.session_state.layer_order[display_idx - 1] = \
                             st.session_state.layer_order[display_idx - 1], st.session_state.layer_order[display_idx]
@@ -595,7 +595,7 @@ def generation_profile_creator():
             # ================================================================
             with col_down:
                 if display_idx < len(st.session_state.layer_order) - 1:
-                    if st.button("", key=f"btn_down_{layer_id}", help="Move layer down"):
+                    if st.button("⬇", key=f"btn_down_{layer_id}", help="Move layer down"):
                         # Swap with next
                         st.session_state.layer_order[display_idx], st.session_state.layer_order[display_idx + 1] = \
                             st.session_state.layer_order[display_idx + 1], st.session_state.layer_order[display_idx]
@@ -607,7 +607,7 @@ def generation_profile_creator():
             # DELETE BUTTON
             # ================================================================
             with col_delete:
-                if st.button("", key=f"btn_delete_{layer_id}", help="Remove this layer"):
+                if st.button("✕", key=f"btn_delete_{layer_id}", help="Remove this layer"):
                     # Remove layer
                     st.session_state.layer_order.remove(layer_id)
                     if layer_id in st.session_state.layer_configs:
