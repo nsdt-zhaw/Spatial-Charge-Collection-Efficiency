@@ -356,7 +356,7 @@ def generation_profile_creator():
         st.warning("Plotly package not installed. Run: `pip install plotly`")
         return
     
-    with st.expander("Generate G(z) from Layer Structure (TMM)", expanded=False):
+    with st.expander("Generate G(z,λ) from layer structure (TMM)", expanded=False):
         
         st.markdown("""
         Create generation profile from optical simulation using Transfer Matrix Method.
@@ -367,10 +367,20 @@ def generation_profile_creator():
         # Initialize layer state in session state with proper tracking
         # ====================================================================
         
+        # Default stack: Glass / FTO / SAM / Perovskite / C60 / Metal (Au, semi-infinite).
+        # Perovskite is set as the active (absorber) layer.
         if 'layer_order'not in st.session_state:
-            st.session_state.layer_order = []
-        
-        if 'layer_configs'not in st.session_state:
+            st.session_state.layer_order = [0, 1, 2, 3, 4, 5]
+            st.session_state.layer_configs = {
+                0: {'name': 'Glass',      'thickness': 1_000_000.0, 'file': None, 'file_source': 'local', 'local_file_name': 'nk_glass.txt',        'coherency': 'i'},
+                1: {'name': 'FTO',        'thickness': 400.0,       'file': None, 'file_source': 'local', 'local_file_name': 'nk_FTO.txt',          'coherency': 'c'},
+                2: {'name': 'SAM',        'thickness': 5.0,         'file': None, 'file_source': 'local', 'local_file_name': '',                    'coherency': 'c'},
+                3: {'name': 'Perovskite', 'thickness': 500.0,       'file': None, 'file_source': 'local', 'local_file_name': 'nk_peroTripleCat.txt','coherency': 'c'},
+                4: {'name': 'C60',        'thickness': 30.0,        'file': None, 'file_source': 'local', 'local_file_name': 'nk_C60_2.txt',        'coherency': 'c'},
+                5: {'name': 'Metal',      'thickness': np.inf,      'file': None, 'file_source': 'local', 'local_file_name': 'nk_Au.txt',           'coherency': 'c'},
+            }
+            st.session_state.active_layer_selector = 3  # Perovskite
+        elif 'layer_configs'not in st.session_state:
             st.session_state.layer_configs = {}
         
         # ====================================================================
@@ -446,7 +456,7 @@ def generation_profile_creator():
         layers = [None] * len(st.session_state.layer_order)
         
         # Display layers in order with reordering and deletion controls
-        st.markdown("**Layer Configuration** (Reorder with arrows, delete with ):")
+        st.markdown("**Layer Configuration** (reorder with ⬆/⬇, delete with ✕)")
 
         # Loop through layers in display order
         for display_idx, layer_id in enumerate(st.session_state.layer_order):
