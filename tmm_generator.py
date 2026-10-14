@@ -31,13 +31,17 @@ from pathlib import Path
 
 
 def list_nk_files_in_directory(directory="resources/nk data", extensions=['.txt', '.nk', '.dat']):
-    """List all n-k files with given extensions in a directory."""
+    """List all n-k files with given extensions in a directory (recursive).
+
+    Returns paths relative to `directory` so subfolder-organised collections
+    (e.g. `dasgupta/FACsPb_BrI/*.nk`) remain selectable without flattening.
+    """
     path = Path(directory)
     if not path.exists():
         return []
     files = []
     for ext in extensions:
-        files.extend([f.name for f in path.glob(f'*{ext}')])
+        files.extend([f.relative_to(path).as_posix() for f in path.rglob(f'*{ext}')])
     return sorted(files)
 
 
@@ -374,8 +378,8 @@ def generation_profile_creator():
             st.session_state.layer_configs = {
                 0: {'name': 'Glass',      'thickness': 1_000_000.0, 'file': None, 'file_source': 'local', 'local_file_name': 'nk_glass.txt',        'coherency': 'i'},
                 1: {'name': 'FTO',        'thickness': 400.0,       'file': None, 'file_source': 'local', 'local_file_name': 'nk_FTO.txt',          'coherency': 'c'},
-                2: {'name': 'SAM',        'thickness': 5.0,         'file': None, 'file_source': 'local', 'local_file_name': '',                    'coherency': 'c'},
-                3: {'name': 'Perovskite', 'thickness': 500.0,       'file': None, 'file_source': 'local', 'local_file_name': 'nk_peroTripleCat.txt','coherency': 'c'},
+                2: {'name': 'SAM',        'thickness': 5.0,         'file': None, 'file_source': 'local', 'local_file_name': 'dasgupta/other/SAM.nk',                             'coherency': 'c'},
+                3: {'name': 'Perovskite', 'thickness': 500.0,       'file': None, 'file_source': 'local', 'local_file_name': 'dasgupta/FACsPb_BrI/FACsPb_Br010_Eg1.48eV.nk',    'coherency': 'c'},
                 4: {'name': 'C60',        'thickness': 30.0,        'file': None, 'file_source': 'local', 'local_file_name': 'nk_C60_2.txt',        'coherency': 'c'},
                 5: {'name': 'Metal',      'thickness': np.inf,      'file': None, 'file_source': 'local', 'local_file_name': 'nk_Au.txt',           'coherency': 'c'},
             }
@@ -393,7 +397,7 @@ def generation_profile_creator():
         st.info("""
         **Stack Tips:**
         - Define layers from front to back (e.g., Glass → ITO → Perovskite → C60 → Metal)
-        - **n-k files**: Select from local files in `resources/nk data` or upload custom files
+        - **n-k files**: Select from local files in `resources/nk data` (incl. perovskite/SAM/SnO₂/glass from the [Dasgupta repository](https://github.com/akashdasgupta/Perovskite-Dielectric-Constants-Repository) under `dasgupta/`) or upload custom files
         - For **opaque** back contacts (Au, Ag, Al): Check "Semi-infinite"
         - For **transparent** devices (ITO back, bifacial): Uncheck "Semi-infinite"and set thickness
         - Active layer = absorber where generation profile is extracted

@@ -127,6 +127,7 @@ resources/
   gen data/             - Example generation profiles (coherent and incoherent)
   sce data/             - Reference φ profiles for validation
   nk data/              - Optical constants for TMM
+    dasgupta/           - Perovskite + SAM/SnO2/glass n,k from Dasgupta et al.
   Sunspectrum.sp        - AM1.5G solar spectrum
 ```
 
@@ -143,6 +144,8 @@ resources/
 ## Acknowledgments
 
 The Streamlit GUI for this app was built with assistance from [Claude](https://claude.ai) by Anthropic.
+
+The perovskite, SAM, SnO₂ and glass n,k datasets under `resources/nk data/dasgupta/` are redistributed from the [Perovskite-Dielectric-Constants-Repository](https://github.com/akashdasgupta/Perovskite-Dielectric-Constants-Repository) by Dasgupta et al.
 
 ## License
 
