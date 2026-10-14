@@ -24,7 +24,7 @@ try:
 except ImportError:
     TMM_AVAILABLE = False
     st.warning("""
-    ⚠️ TMM generator not available. To enable:
+    TMM generator not available. To enable:
     1. Place `tmm_generator.py` in the same folder as `app.py`
     2. Run: `pip install tmm`
     """)
@@ -43,8 +43,8 @@ def is_wavelength_header(line):
     line_lower = line.lower()
     # Check for common position column names
     has_position_col = any(x in line_lower for x in ['x (nm)', 'depth (nm)', 'depth(nm)', 'position'])
-    # Check if line contains multiple 'nm' occurrences (wavelength columns)
-    nm_count = line_lower.count(' nm') + line_lower.count('\tnm')
+    # Check if line contains multiple 'nm'occurrences (wavelength columns)
+    nm_count = line_lower.count('nm') + line_lower.count('\tnm')
     has_multiple_nm = nm_count >= 2
     # Check for numeric values followed by nm (e.g., "315.0 nm")
     has_wavelength_pattern = bool(re.search(r'\d+\.?\d*\s*nm', line_lower))
@@ -58,7 +58,7 @@ def extract_wavelengths_from_line(line, expected_count):
     try:
         wavelengths = []
         for part in parts[1:]:
-            # Try to extract number from string like "315.0" or "315.0nm"
+            # Try to extract number from string like "315.0"or "315.0nm"
             num_str = ''.join(c for c in part if c.isdigit() or c == '.')
             if num_str:
                 wavelengths.append(float(num_str))
@@ -180,71 +180,71 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
 
         # 9. Create comprehensive analysis_info.txt with all settings and file information
         info_lines = [
-            "=" * 60,
+            "="* 60,
             "varphi EXTRACTION ANALYSIS - SETTINGS AND RESULTS SUMMARY",
-            "=" * 60,
+            "="* 60,
             "",
             "INPUT FILES",
-            "-" * 40,
-            f"EQE file:        {settings_info.get('eqe_file', 'N/A')}",
+            "-"* 40,
+            f"EQE file: {settings_info.get('eqe_file', 'N/A')}",
             f"Generation file: {settings_info.get('gen_file', 'N/A')}",
             f"Spectrum source: {settings_info.get('sun_source', 'N/A')}",
             "",
             "BOUNDARIES",
-            "-" * 40,
+            "-"* 40,
             f"CTL boundary x1: {settings_info.get('x1', 'N/A')} nm",
             f"CTL boundary x2: {settings_info.get('x2', 'N/A')} nm",
             "",
             "PROCESSING OPTIONS",
-            "-" * 40,
-            f"Use white light spectrum:      {settings_info.get('use_white', 'N/A')}",
-            f"Use 1st derivative reg.:       {settings_info.get('use_first_derivative', 'N/A')}",
-            f"Cross-validation:              {'LOO' if settings_info.get('n_splits') == 'LOO' else str(settings_info.get('n_splits', 'N/A')) + '-fold'}",
+            "-"* 40,
+            f"Use white light spectrum: {settings_info.get('use_white', 'N/A')}",
+            f"Use 1st derivative reg.: {settings_info.get('use_first_derivative', 'N/A')}",
+            f"Cross-validation: {'LOO'if settings_info.get('n_splits') == 'LOO'else str(settings_info.get('n_splits', 'N/A')) + '-fold'}",
             "",
             "WAVELENGTH FILTER",
-            "-" * 40,
-            f"Enabled:         {settings_info.get('use_wl_filter', False)}",
+            "-"* 40,
+            f"Enabled: {settings_info.get('use_wl_filter', False)}",
         ]
         if settings_info.get('use_wl_filter', False):
             info_lines.extend([
-                f"Min wavelength:  {settings_info.get('wl_min', 'N/A')} nm",
-                f"Max wavelength:  {settings_info.get('wl_max', 'N/A')} nm",
+                f"Min wavelength: {settings_info.get('wl_min', 'N/A')} nm",
+                f"Max wavelength: {settings_info.get('wl_max', 'N/A')} nm",
             ])
 
         info_lines.extend([
             "",
             "WEIGHTED FITTING",
-            "-" * 40,
-            f"Enabled:         {settings_info.get('use_weighted', False)}",
+            "-"* 40,
+            f"Enabled: {settings_info.get('use_weighted', False)}",
         ])
         if settings_info.get('use_weighted', False):
             info_lines.extend([
-                f"Min wavelength:  {settings_info.get('weight_wl_min', 'N/A')} nm",
-                f"Max wavelength:  {settings_info.get('weight_wl_max', 'N/A')} nm",
-                f"Weight factor:   {settings_info.get('weight_factor', 'N/A')}",
+                f"Min wavelength: {settings_info.get('weight_wl_min', 'N/A')} nm",
+                f"Max wavelength: {settings_info.get('weight_wl_max', 'N/A')} nm",
+                f"Weight factor: {settings_info.get('weight_factor', 'N/A')}",
             ])
 
         info_lines.extend([
             "",
             "REGULARIZATION",
-            "-" * 40,
+            "-"* 40,
             f"gamma range (log10): {settings_info.get('alpha_min', 'N/A')} to {settings_info.get('alpha_max', 'N/A')}",
-            f"Number of gammas:    {settings_info.get('n_alphas', 'N/A')}",
+            f"Number of gammas: {settings_info.get('n_alphas', 'N/A')}",
         ])
 
         # varphi Smoothing section
         info_lines.extend([
             "",
             "varphi SMOOTHING",
-            "-" * 40,
-            f"Enabled:             {settings_info.get('use_smoothing', False)}",
+            "-"* 40,
+            f"Enabled: {settings_info.get('use_smoothing', False)}",
         ])
         if settings_info.get('use_smoothing', False):
             smooth_method = settings_info.get('smooth_method', 'Savitzky-Golay')
-            info_lines.append(f"Method:              {smooth_method}")
+            info_lines.append(f"Method: {smooth_method}")
             if smooth_method == "Savitzky-Golay":
-                info_lines.append(f"Window size:         {settings_info.get('smooth_window', 'N/A')}")
-                info_lines.append(f"Polynomial order:    {settings_info.get('smooth_polyorder', 'N/A')}")
+                info_lines.append(f"Window size: {settings_info.get('smooth_window', 'N/A')}")
+                info_lines.append(f"Polynomial order: {settings_info.get('smooth_polyorder', 'N/A')}")
             else:  # Smoothing Spline
                 info_lines.append(f"Smoothing parameter: {settings_info.get('spline_smoothing', 'N/A')}")
 
@@ -252,46 +252,46 @@ def create_results_zip(alphas, mse, lam, pos, inc_flux, y, y_fit_current, y_fit_
         info_lines.extend([
             "",
             "BOUNDS SCREENING",
-            "-" * 40,
-            f"Screen by bounds:    {settings_info.get('screen_out_of_bounds', True)}",
+            "-"* 40,
+            f"Screen by bounds: {settings_info.get('screen_out_of_bounds', True)}",
         ])
         if settings_info.get('screen_out_of_bounds', True):
             info_lines.extend([
-                f"  varphi min:        {settings_info.get('screen_bounds_min', 0.0)}",
-                f"  varphi max:        {settings_info.get('screen_bounds_max', 1.0)}",
+                f"varphi min: {settings_info.get('screen_bounds_min', 0.0)}",
+                f"varphi max: {settings_info.get('screen_bounds_max', 1.0)}",
             ])
 
         info_lines.extend([
             "",
             "RESULTS",
-            "-" * 40,
-            f"Optimal gamma:       {best_alpha:.4e}",
+            "-"* 40,
+            f"Optimal gamma: {best_alpha:.4e}",
         ])
-        info_lines.append(f"Optimal MSE:         {mse[best_alpha]:.4e}")
+        info_lines.append(f"Optimal MSE: {mse[best_alpha]:.4e}")
         info_lines.extend([
-            f"Current gamma:       {current_alpha:.4e}",
-            f"Current MSE:         {mse.get(current_alpha, 'N/A') if current_alpha in mse else 'interpolated'}",
-            f"Final Jsc:           {cumulative_jsc[-1]:.2f} mA/cm²",
+            f"Current gamma: {current_alpha:.4e}",
+            f"Current MSE: {mse.get(current_alpha, 'N/A') if current_alpha in mse else 'interpolated'}",
+            f"Final Jsc: {cumulative_jsc[-1]:.2f} mA/cm²",
             "",
             "DATA RANGES",
-            "-" * 40,
-            f"Wavelength range:    {lam.min():.1f} - {lam.max():.1f} nm ({len(lam)} points)",
-            f"Depth range:         {pos.min():.1f} - {pos.max():.1f} nm ({len(pos)} points)",
+            "-"* 40,
+            f"Wavelength range: {lam.min():.1f} - {lam.max():.1f} nm ({len(lam)} points)",
+            f"Depth range: {pos.min():.1f} - {pos.max():.1f} nm ({len(pos)} points)",
             "",
-            "=" * 60,
+            "="* 60,
             "FILES IN THIS ARCHIVE",
-            "=" * 60,
+            "="* 60,
         ])
-        info_lines.append("cv_results.txt          - Cross-validation gamma vs MSE")
+        info_lines.append("cv_results.txt - Cross-validation gamma vs MSE")
         info_lines.extend([
-            "eqe_original.txt        - Original EQE data",
-            "eqe_interpolated.txt    - EQE interpolated to generation wavelengths",
-            "eqe_fit_current.txt     - Fitted EQE at current gamma",
-            "eqe_fit_optimal.txt     - Fitted EQE at optimal gamma",
-            "varphi_current.txt      - varphi profile at current gamma",
-            "varphi_optimal.txt      - varphi profile at optimal gamma (with std)",
+            "eqe_original.txt - Original EQE data",
+            "eqe_interpolated.txt - EQE interpolated to generation wavelengths",
+            "eqe_fit_current.txt - Fitted EQE at current gamma",
+            "eqe_fit_optimal.txt - Fitted EQE at optimal gamma",
+            "varphi_current.txt - varphi profile at current gamma",
+            "varphi_optimal.txt - varphi profile at optimal gamma (with std)",
             "generation_analysis.txt - Generation and Jsc analysis",
-            "analysis_info.txt       - This file",
+            "analysis_info.txt - This file",
             "",
         ])
 
@@ -320,8 +320,8 @@ def preview_eqe_data(eqe_file):
             line=dict(color='rgb(0, 100, 200)', width=2),
             marker=dict(size=4),
             name='EQE',
-            hovertemplate='<b>Wavelength:</b> %{x:.1f} nm<br>' +
-                        '<b>EQE:</b> %{y:.4f}<br>' +
+            hovertemplate='<b>Wavelength:</b> %{x:.1f} nm<br>'+
+                        '<b>EQE:</b> %{y:.4f}<br>'+
                         '<extra></extra>'
         ))
 
@@ -414,8 +414,8 @@ def preview_generation_profile(gen_file):
                 fill='tozeroy',
                 fillcolor='rgba(220, 20, 60, 0.3)',
                 name='Total G(z)',
-                hovertemplate='<b>Depth:</b> %{x:.1f} nm<br>' +
-                            '<b>Generation:</b> %{y:.2f}×10²¹ cm⁻³s⁻¹<br>' +
+                hovertemplate='<b>Depth:</b> %{x:.1f} nm<br>'+
+                            '<b>Generation:</b> %{y:.2f}×10²¹ cm⁻³s⁻¹<br>'+
                             '<extra></extra>',
                 showlegend=False
             ),
@@ -452,16 +452,16 @@ def preview_generation_profile(gen_file):
                     len=0.9,
                     thickness=15
                 ),
-                hovertemplate='<b>Wavelength:</b> %{x:.1f} nm<br>' +
-                            '<b>Depth:</b> %{y:.1f} nm<br>' +
-                            '<b>Generation:</b> %{z:.2f}×10²¹ cm⁻³s⁻¹<br>' +
+                hovertemplate='<b>Wavelength:</b> %{x:.1f} nm<br>'+
+                            '<b>Depth:</b> %{y:.1f} nm<br>'+
+                            '<b>Generation:</b> %{z:.2f}×10²¹ cm⁻³s⁻¹<br>'+
                             '<extra></extra>'
             ),
             row=1, col=2
         )
 
         fig.update_xaxes(
-            title_text="Wavelength (nm)" if len(wavelengths) == generation.shape[1] else "Wavelength Index",
+            title_text="Wavelength (nm)"if len(wavelengths) == generation.shape[1] else "Wavelength Index",
             row=1, col=2,
             showgrid=False
         )
@@ -487,23 +487,22 @@ def preview_generation_profile(gen_file):
         return None, None, None, None, None
 
 # Page config
-st.set_page_config(page_title="φ Extraction Analysis", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="φ Extraction Analysis", layout="wide")
 
 # Initialize manual fitting state to closed on first load
-if 'manual_fitting_open' not in st.session_state:
+if 'manual_fitting_open'not in st.session_state:
     st.session_state.manual_fitting_open = False
 
 st.title("EQE fitting and φ(z) extraction")
 st.markdown("Upload your experimental EQE data and simulated generation profiles to extract the collection probability φ(z)")
 
 with st.sidebar:
-    if st.button("🔄 Clear All", use_container_width=True, type="secondary", help="Reset the app and clear all data"):
+    if st.button("Clear All", use_container_width=True, type="secondary", help="Reset the app and clear all data"):
         st.session_state.clear()
         st.rerun()
 
 # Custom CSS for smaller headers on small screens and sidebar width
-st.markdown("""
-<style>
+st.markdown("""<style>
     /* Widen sidebar for settings */
     [data-testid="stSidebar"] {
         min-width: 420px;
@@ -647,7 +646,7 @@ def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None
     pos       : depth in nm.
     gen       : spectral generation rate in cm^-3 s^-1, shape (n_z, n_wl).
     eqe       : (wavelength [nm], EQE [-]).
-    sun_spec  : (wavelength [nm], value); the meaning of "value" depends on
+    sun_spec  : (wavelength [nm], value); the meaning of "value"depends on
                 is_photon_flux:
                   is_photon_flux=False -> spectral irradiance in W m^-2 nm^-1
                                           (converted internally to photon flux).
@@ -701,7 +700,7 @@ def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None
 
     # If generation wavelengths are provided, interpolate EQE to match
     if gen_wavelengths is not None and len(gen_wavelengths) == gen.shape[1]:
-        st.info(f"📊 Interpolating EQE from {len(eqe_wavelengths)} points ({eqe_wavelengths.min():.0f}-{eqe_wavelengths.max():.0f} nm) "
+        st.info(f"Interpolating EQE from {len(eqe_wavelengths)} points ({eqe_wavelengths.min():.0f}-{eqe_wavelengths.max():.0f} nm) "
                 f"to {len(gen_wavelengths)} generation wavelengths ({gen_wavelengths.min():.0f}-{gen_wavelengths.max():.0f} nm)")
 
         # Interpolate EQE onto generation wavelengths
@@ -714,7 +713,7 @@ def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None
         lam = eqe_wavelengths
         eqe_vals_interp = eqe_vals
         if gen_wavelengths is None:
-            st.warning("⚠️ Could not extract wavelengths from generation file header. "
+            st.warning("Could not extract wavelengths from generation file header. "
                       "Assuming EQE and generation wavelengths match exactly.")
 
     # Apply wavelength filter if specified
@@ -727,7 +726,7 @@ def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None
 
         n_filtered = np.sum(~wl_mask)
         if n_filtered > 0:
-            st.info(f"🔍 Wavelength filtering: excluding {n_filtered} wavelengths outside "
+            st.info(f"Wavelength filtering: excluding {n_filtered} wavelengths outside "
                    f"[{wl_min if wl_min else 'min'}, {wl_max if wl_max else 'max'}] nm range. "
                    f"Using {np.sum(wl_mask)} wavelengths from {lam[wl_mask].min():.0f} to {lam[wl_mask].max():.0f} nm.")
 
@@ -783,14 +782,14 @@ gen_files = list_files_in_directory("resources/gen data")
 default_sun_path = "resources/Sunspectrum.sp"
 
 # --- Sidebar: Data selection ---
-st.sidebar.header("📁 Data selection")
+st.sidebar.header("Data selection")
 
 st.sidebar.subheader("EQE data")
 eqe_source = st.sidebar.radio("Source:", ["Local file", "Upload"], key="eqe_source", horizontal=True)
-if eqe_source == "Local file" and eqe_files:
+if eqe_source == "Local file"and eqe_files:
     eqe_selected_list = st.sidebar.multiselect("Select EQE file(s):", eqe_files, key="eqe_select",
                                         help="Select one or more EQE files for batch processing")
-    eqe_file_list = [f"resources/eqe data/{f}" for f in eqe_selected_list] if eqe_selected_list else []
+    eqe_file_list = [f"resources/eqe data/{f}"for f in eqe_selected_list] if eqe_selected_list else []
 else:
     uploaded_eqe = st.sidebar.file_uploader("Upload EQE data", type=['txt', 'csv', 'dat'],
                                      accept_multiple_files=True, key="eqe_upload",
@@ -808,15 +807,15 @@ eqe_file = eqe_file_list[0] if eqe_file_list else None
 
 st.sidebar.subheader("Generation profile")
 gen_source = st.sidebar.radio("Source:", ["Local file", "Upload"], key="gen_source", horizontal=True)
-if gen_source == "Local file" and gen_files:
+if gen_source == "Local file"and gen_files:
     gen_selected = st.sidebar.selectbox("Select generation file:", [""] + gen_files, key="gen_select")
-    gen_file = f"resources/gen data/{gen_selected}" if gen_selected else None
+    gen_file = f"resources/gen data/{gen_selected}"if gen_selected else None
 else:
     gen_file = st.sidebar.file_uploader("Upload generation profile", type=['txt', 'csv', 'dat'], key="gen_upload")
 
     # Show format requirements for uploaded files
     st.sidebar.info("""
-    📄 **File Format Requirements:**
+    **File Format Requirements:**
     - Header: `x (nm)` followed by wavelengths
     - Data: `position(nm)` then generation values
     - Tab or space separated
@@ -831,7 +830,7 @@ is_photon_flux = (sun_source == "Photon flux file")
 if sun_source == "Default (Sunspectrum.sp)":
     if Path(default_sun_path).exists():
         sun_file = default_sun_path
-        st.sidebar.success("✓ Using default AM1.5G spectrum")
+        st.sidebar.success("Using default AM1.5G spectrum")
     else:
         st.sidebar.error("Default spectrum not found!")
         sun_file = None
@@ -841,11 +840,11 @@ else:
     sun_file = st.sidebar.file_uploader("Upload photon flux file", type=['txt', 'csv', 'dat'], key="photon_flux_upload",
                                 help="File with wavelength [nm] and photon flux [photons/s/cm²]")
     if sun_file:
-        st.sidebar.info("📊 Using photon flux directly")
+        st.sidebar.info("Using photon flux directly")
 
 # Display EQE preview (full width outside columns)
-if 'show_eqe_preview' in locals() and show_eqe_preview and eqe_file_list:
-    with st.expander("📊 EQE data preview", expanded=True):
+if 'show_eqe_preview'in locals() and show_eqe_preview and eqe_file_list:
+    with st.expander("EQE data preview", expanded=True):
         with st.spinner("Loading preview..."):
             if len(eqe_file_list) == 1:
                 fig, wls, eqe_vals = preview_eqe_data(eqe_file_list[0])
@@ -885,8 +884,8 @@ if 'show_eqe_preview' in locals() and show_eqe_preview and eqe_file_list:
                 st.plotly_chart(fig, use_container_width=True)
 
 # Display generation profile preview (full width outside columns)
-if 'show_gen_preview' in locals() and show_gen_preview and gen_file:
-    with st.expander("📊 Generation profile preview", expanded=True):
+if 'show_gen_preview'in locals() and show_gen_preview and gen_file:
+    with st.expander("Generation profile preview", expanded=True):
         with st.spinner("Loading preview..."):
             fig, z_pos, gen_data, wls, total_gen = preview_generation_profile(gen_file)
             if fig is not None:
@@ -907,7 +906,7 @@ if TMM_AVAILABLE:
 
 # --- Sidebar: Settings ---
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Settings")
+st.sidebar.header("Settings")
 
 # Row 1: Boundaries
 sb_col1, sb_col2 = st.sidebar.columns(2)
@@ -979,7 +978,7 @@ if st.session_state.get('manual_fitting_open', False) and eqe_file and gen_file 
     with st.expander("Manual φ Explorer", expanded=True):
         if MANUAL_FITTING_AVAILABLE:
             # Load data if not already loaded for manual fitting
-            if 'manual_data_loaded' not in st.session_state or st.session_state.get('manual_reload_needed', True):
+            if 'manual_data_loaded'not in st.session_state or st.session_state.get('manual_reload_needed', True):
                 with st.spinner("Loading data for manual fitting..."):
                     pos_manual, gen_manual, eqe_manual, sun_spec_manual, gen_wavelengths_manual = read_uploaded_data(
                         eqe_file, gen_file, sun_file, x1, x2
@@ -998,7 +997,7 @@ if st.session_state.get('manual_fitting_open', False) and eqe_file and gen_file 
                     st.session_state.manual_data_loaded = True
                     st.session_state.manual_reload_needed = False
 
-                    st.success(f"✅ Data loaded: {len(pos_manual)} depth points, {gen_manual.shape[1]} generation wavelengths, {eqe_manual.shape[0]} EQE wavelengths")
+                    st.success(f"Data loaded: {len(pos_manual)} depth points, {gen_manual.shape[1]} generation wavelengths, {eqe_manual.shape[0]} EQE wavelengths")
 
             # Retrieve data from session state
             pos_manual = st.session_state.pos_manual
@@ -1153,7 +1152,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                 else:
                     best_alpha = min(mse, key=mse.get)
                 progress_bar.empty()
-                if is_batch and 'progress_text' in dir():
+                if is_batch and 'progress_text'in dir():
                     progress_text.empty()
 
                 # Set shared alpha from first file if using same alpha mode
@@ -1175,7 +1174,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
                 'y_weighted': y_weighted,
                 'sample_weights': sample_weights,
                 'mse': mse,
-                'oob_mask': oob_mask if 'oob_mask' in dir() else {},  # Out-of-bounds mask for screening
+                'oob_mask': oob_mask if 'oob_mask'in dir() else {},  # Out-of-bounds mask for screening
                 'best_alpha': best_alpha,
                 'alphas': alphas,
                 'eqe_original_wavelengths': eqe_original_wavelengths,
@@ -1183,7 +1182,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
             }
 
             if not is_batch:
-                weight_str = f" (weighted: {weight_wl_min}-{weight_wl_max} nm, {weight_factor}×)" if weight_factor is not None else ""
+                weight_str = f"(weighted: {weight_wl_min}-{weight_wl_max} nm, {weight_factor}×)"if weight_factor is not None else ""
                 st.success(f"Optimal γ: **{best_alpha:.2e}** (MSE: {mse[best_alpha]:.2e}){weight_str}")
 
     # Store batch results in session state
@@ -1229,7 +1228,7 @@ if run_analysis and eqe_file_list and gen_file and sun_file:
         st.success(f"Batch processing complete: {len(batch_results)} files processed")
 
 # Display results if analysis has been run
-if 'analysis_complete' in st.session_state and st.session_state.analysis_complete:
+if 'analysis_complete'in st.session_state and st.session_state.analysis_complete:
     # Check if this is batch mode
     is_batch_results = st.session_state.get('is_batch', False)
     batch_results = st.session_state.get('batch_results', {})
@@ -1517,7 +1516,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
 
             # Raw SCE line (solid if no smoothing, dashed if smoothing enabled)
             line_style = dict(color=color, width=1, dash='dash') if use_smoothing_batch else dict(color=color, width=2)
-            name_suffix = ' (raw)' if use_smoothing_batch else ''
+            name_suffix = '(raw)'if use_smoothing_batch else ''
             fig_compare.add_trace(go.Scatter(
                 x=pos,
                 y=sce_raw,
@@ -1551,7 +1550,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 hovertemplate=f'{ref_name}<br>Depth: %{{x:.1f}} nm<br>φ: %{{y:.4f}}<extra></extra>'
             ))
 
-        plot_title = 'φ Profile Comparison (Raw vs Smoothed)' if use_smoothing_batch else 'φ Profile Comparison'
+        plot_title = 'φ Profile Comparison (Raw vs Smoothed)'if use_smoothing_batch else 'φ Profile Comparison'
         fig_compare.update_layout(
             title=dict(text=plot_title, font=dict(size=18, family='Arial Black')),
             xaxis=dict(title='Depth (nm)', gridcolor='lightgray'),
@@ -1624,7 +1623,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         st.subheader("Download Batch Results")
 
         # Store default name in session state so it doesn't change on rerun
-        if 'batch_results_name' not in st.session_state:
+        if 'batch_results_name'not in st.session_state:
             st.session_state.batch_results_name = f"varphi_batch_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         results_name = st.text_input(
@@ -1639,39 +1638,39 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             # Analysis info
             info_lines = [
                 "varphi Batch Analysis Results",
-                "=" * 50,
+                "="* 50,
                 f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                 f"Number of files: {len(batch_results)}",
                 f"Used same gamma for all: {use_same_alpha_mode}",
             ]
             if use_same_alpha_mode and current_alpha is not None:
-                info_lines.append(f"  - Current gamma (slider): {current_alpha:.2e}")
-                info_lines.append(f"  - Optimal gamma (from first file): {shared_alpha:.2e}")
+                info_lines.append(f"- Current gamma (slider): {current_alpha:.2e}")
+                info_lines.append(f"- Optimal gamma (from first file): {shared_alpha:.2e}")
             info_lines.extend([
                 "",
                 "Settings:",
-                f"  - Boundaries: x1={x1} nm, x2={x2} nm",
-                f"  - White light: {use_white}",
-                f"  - CV: {'LOO' if n_splits == 'LOO' else f'{n_splits}-fold'}",
-                f"  - varphi smoothing: {use_smoothing_batch}",
+                f"- Boundaries: x1={x1} nm, x2={x2} nm",
+                f"- White light: {use_white}",
+                f"- CV: {'LOO'if n_splits == 'LOO'else f'{n_splits}-fold'}",
+                f"- varphi smoothing: {use_smoothing_batch}",
             ])
             if use_smoothing_batch:
-                info_lines.append(f"    - Method: {smooth_method_batch}")
+                info_lines.append(f"- Method: {smooth_method_batch}")
                 if smooth_method_batch == "Savitzky-Golay":
-                    info_lines.append(f"    - Window size: {smooth_window_batch}")
-                    info_lines.append(f"    - Polynomial order: {smooth_poly_batch}")
+                    info_lines.append(f"- Window size: {smooth_window_batch}")
+                    info_lines.append(f"- Polynomial order: {smooth_poly_batch}")
                 else:
-                    info_lines.append(f"    - Smoothing parameter: {spline_smoothing_batch:.4f}")
-            info_lines.append(f"  - Screen by bounds: {screen_out_of_bounds}")
+                    info_lines.append(f"- Smoothing parameter: {spline_smoothing_batch:.4f}")
+            info_lines.append(f"- Screen by bounds: {screen_out_of_bounds}")
             if screen_out_of_bounds:
                 info_lines.extend([
-                    f"    - varphi min: {screen_bounds_min}",
-                    f"    - varphi max: {screen_bounds_max}",
+                    f"- varphi min: {screen_bounds_min}",
+                    f"- varphi max: {screen_bounds_max}",
                 ])
             info_lines.extend([
                 "",
                 "Results Summary:",
-                "-" * 50,
+                "-"* 50,
             ])
             for item in summary_data:
                 info_lines.append(f"{item['File']}: gamma={item['γ used']}, MSE={item['MSE']}, Jsc={item['Jsc (mA/cm²)']} mA/cm²")
@@ -2117,7 +2116,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     x=pos,
                     y=sce_optimal_raw,
                     mode='lines',
-                    name=f'Optimal γ={best_alpha:.1e}' + (' (raw)' if use_smoothing else ''),
+                    name=f'Optimal γ={best_alpha:.1e}'+ ('(raw)'if use_smoothing else ''),
                     line=line_style,
                     hovertemplate='Depth: %{x:.1f} nm<br>φ (optimal): %{y:.4f}<extra></extra>'
                 ))
@@ -2128,7 +2127,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                 x=pos,
                 y=sce_current_raw,
                 mode='lines',
-                name=f'Current γ={current_alpha:.1e}' + (' (raw)' if use_smoothing else ''),
+                name=f'Current γ={current_alpha:.1e}'+ ('(raw)'if use_smoothing else ''),
                 line=line_style_current,
                 hovertemplate='Depth: %{x:.1f} nm<br>φ (current): %{y:.4f}<extra></extra>'
             ))
@@ -2166,7 +2165,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     hovertemplate=f'{ref_name}<br>Depth: %{{x:.1f}} nm<br>φ: %{{y:.4f}}<extra></extra>'
                 ))
 
-            plot_title = 'Extracted φ Profile (Raw vs Smoothed)' if use_smoothing else 'Extracted φ Profile'
+            plot_title = 'Extracted φ Profile (Raw vs Smoothed)'if use_smoothing else 'Extracted φ Profile'
             fig3.update_layout(
                 title=dict(text=plot_title, font=dict(size=18, family='Arial Black')),
                 xaxis=dict(title='Depth (nm)', gridcolor='lightgray'),
@@ -2234,7 +2233,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
                     x=pos,
                     y=sce_for_analysis,
                     mode='lines',
-                    name='φ' + (' (smoothed)' if use_smoothing else ''),
+                    name='φ'+ ('(smoothed)'if use_smoothing else ''),
                     line=dict(color='darkblue', width=2),
                     hovertemplate='Depth: %{x:.1f} nm<br>φ: %{y:.4f}<extra></extra>',
                     yaxis='y'
@@ -2301,7 +2300,7 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
         st.subheader("Download results")
 
         # Custom name for results - store in session state so it doesn't change on rerun
-        if 'single_results_name' not in st.session_state:
+        if 'single_results_name'not in st.session_state:
             st.session_state.single_results_name = f"varphi_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         results_name = st.text_input(
@@ -2338,9 +2337,9 @@ if 'analysis_complete' in st.session_state and st.session_state.analysis_complet
             'n_alphas': n_alphas,
             'use_smoothing': use_smoothing,
             'smooth_method': smooth_method if use_smoothing else None,
-            'smooth_window': smooth_window if use_smoothing and smooth_method == "Savitzky-Golay" else None,
-            'smooth_polyorder': smooth_poly if use_smoothing and smooth_method == "Savitzky-Golay" else None,
-            'spline_smoothing': spline_smoothing if use_smoothing and smooth_method == "Smoothing Spline" else None,
+            'smooth_window': smooth_window if use_smoothing and smooth_method == "Savitzky-Golay"else None,
+            'smooth_polyorder': smooth_poly if use_smoothing and smooth_method == "Savitzky-Golay"else None,
+            'spline_smoothing': spline_smoothing if use_smoothing and smooth_method == "Smoothing Spline"else None,
             'screen_out_of_bounds': screen_out_of_bounds,
             'screen_bounds_min': screen_bounds_min,
             'screen_bounds_max': screen_bounds_max,
@@ -2414,20 +2413,20 @@ elif not (eqe_file_list and gen_file and sun_file):
     st.info("Please upload all three data files to begin analysis")
     
     st.markdown("---")
-    st.markdown("### 📖 Instructions")
+    st.markdown("### Instructions")
     st.markdown("""
-    1. **Upload data files:**
-       - EQE data: wavelength (nm) vs EQE values
-       - Generation profile: position (nm) and generation rates
-       - Solar spectrum: wavelength (nm) vs flux
+    1. **Upload data files** (required units):
+       - **EQE**: wavelength (nm) vs EQE (-, in [0, 1]).
+       - **Generation profile**: depth (nm) vs spectral generation $G(z, \\lambda)$ in cm$^{-3}$ s$^{-1}$ (one column per wavelength λ in nm).
+       - **Solar spectrum / photon flux**: wavelength (nm) vs either spectral irradiance in W m$^{-2}$ nm$^{-1}$, or photon flux in photons s$^{-1}$ m$^{-2}$ (toggle "Photon flux file" in the sidebar).
 
     2. **Set parameters:**
-       - CTL boundaries (x1, x2) define the active region
-       - Choose white light or solar spectrum
-       - Adjust cross-validation folds and γ range
+       - CTL boundaries (x1, x2) in nm define the absorber region.
+       - Choose white light or solar spectrum.
+       - Adjust cross-validation folds and γ range.
 
     3. **Run analysis:**
-       - Click "Run analysis" to extract φ(z) profile
-       - View cross-validation results and fitted EQE
-       - Download extracted φ(z) data
+       - Click "Run analysis" to extract φ(z).
+       - View cross-validation results and fitted EQE.
+       - Download extracted φ(z) data.
     """)

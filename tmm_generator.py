@@ -1,5 +1,4 @@
-"""
-TMM Generation Profile Creator Component - Enhanced with Layer Reordering
+"""TMM Generation Profile Creator Component - Enhanced with Layer Reordering
 ==========================================================================
 
 Optional component for SCE extraction app that allows users to generate
@@ -205,7 +204,7 @@ def calculate_generation_tmm(materials, thicknesses, coherency_list, active_laye
     thicknesses : list of float
         Layer thicknesses in nm (use np.inf for semi-infinite)
     coherency_list : list of str
-        'c' or 'i' for each layer
+        'c'or 'i'for each layer
     active_layer_idx : int
         Index of active layer (0-indexed)
     wavelengths : ndarray
@@ -279,7 +278,7 @@ def calculate_generation_tmm(materials, thicknesses, coherency_list, active_laye
         # Run TMM calculation with incoherent support
         try:
             # Use inc_tmm (incoherent/mixed) if any layers are incoherent
-            if 'i' in coherency_list:
+            if 'i'in coherency_list:
                 result = tmm.inc_tmm('s', n_list, thicknesses, coherency_list, 0, wavelength)
             else:
                 # All coherent - use standard coherent TMM
@@ -294,7 +293,7 @@ def calculate_generation_tmm(materials, thicknesses, coherency_list, active_laye
         
         for z in z_positions:
             try:
-                if 'i' not in coherency_list:
+                if 'i'not in coherency_list:
                     # Fully coherent stack - standard method
                     data = tmm.position_resolved(active_layer_idx, z, result)
                     absorption_profile.append(data['absor'])
@@ -348,13 +347,13 @@ def generation_profile_creator():
     try:
         import tmm
     except ImportError:
-        st.warning("⚠️ TMM package not installed. Run: `pip install tmm`")
+        st.warning("TMM package not installed. Run: `pip install tmm`")
         return
     
     try:
         import plotly.graph_objects as go
     except ImportError:
-        st.warning("⚠️ Plotly package not installed. Run: `pip install plotly`")
+        st.warning("Plotly package not installed. Run: `pip install plotly`")
         return
     
     with st.expander("Generate G(z) from Layer Structure (TMM)", expanded=False):
@@ -368,31 +367,31 @@ def generation_profile_creator():
         # Initialize layer state in session state with proper tracking
         # ====================================================================
         
-        if 'layer_order' not in st.session_state:
+        if 'layer_order'not in st.session_state:
             st.session_state.layer_order = []
         
-        if 'layer_configs' not in st.session_state:
+        if 'layer_configs'not in st.session_state:
             st.session_state.layer_configs = {}
         
         # ====================================================================
         # Stack Definition
         # ====================================================================
         
-        st.markdown("#### 📚 Define Stack Structure")
+        st.markdown("#### Define Stack Structure")
         st.markdown("*Air (incident medium) is added automatically as first layer*")
         
         st.info("""
-        💡 **Stack Tips:**
+        **Stack Tips:**
         - Define layers from front to back (e.g., Glass → ITO → Perovskite → C60 → Metal)
         - **n-k files**: Select from local files in `resources/nk data` or upload custom files
         - For **opaque** back contacts (Au, Ag, Al): Check "Semi-infinite"
-        - For **transparent** devices (ITO back, bifacial): Uncheck "Semi-infinite" and set thickness
+        - For **transparent** devices (ITO back, bifacial): Uncheck "Semi-infinite"and set thickness
         - Active layer = absorber where generation profile is extracted
-        - **Thick layers** (>1 μm, like glass): Mark as "Incoherent" to remove interference fringes
+        - **Thick layers** (>1 μm, like glass): Mark as "Incoherent"to remove interference fringes
         - **Glass thickness examples**: 0.7 mm = 700,000 nm, 1 mm = 1,000,000 nm
-        - **Reorder layers** using the ⬆️ and ⬇️ buttons
-        - **Delete layers** using the ❌ button
-        """, icon="ℹ️")
+        - **Reorder layers** using the up/down buttons
+        - **Delete layers** using the delete button
+        """)
         
         # Get the current number of layers from session state (for delete updates)
         current_n_layers = len(st.session_state.layer_order) if st.session_state.layer_order else 6
@@ -438,7 +437,7 @@ def generation_profile_creator():
                     'name': f'Layer_{layer_id}',
                     'thickness': 100.0,
                     'file': None,
-                    'file_source': 'local',  # 'local' or 'upload'
+                    'file_source': 'local',  # 'local'or 'upload'
                     'local_file_name': '',   # Name of file in resources/nk data
                     'coherency': 'c'
                 }
@@ -447,7 +446,7 @@ def generation_profile_creator():
         layers = [None] * len(st.session_state.layer_order)
         
         # Display layers in order with reordering and deletion controls
-        st.markdown("**Layer Configuration** (Reorder with arrows, delete with ❌):")
+        st.markdown("**Layer Configuration** (Reorder with arrows, delete with ):")
 
         # Loop through layers in display order
         for display_idx, layer_id in enumerate(st.session_state.layer_order):
@@ -461,7 +460,7 @@ def generation_profile_creator():
             # ================================================================
             with col_up:
                 if display_idx > 0:
-                    if st.button("⬆️", key=f"btn_up_{layer_id}", help="Move layer up"):
+                    if st.button("", key=f"btn_up_{layer_id}", help="Move layer up"):
                         # Swap with previous
                         st.session_state.layer_order[display_idx], st.session_state.layer_order[display_idx - 1] = \
                             st.session_state.layer_order[display_idx - 1], st.session_state.layer_order[display_idx]
@@ -529,9 +528,9 @@ def generation_profile_creator():
                     nk_files = list_nk_files_in_directory("resources/nk data")
 
                     # Ensure backward compatibility - if file_source doesn't exist, initialize it
-                    if 'file_source' not in config:
+                    if 'file_source'not in config:
                         config['file_source'] = 'local'
-                    if 'local_file_name' not in config:
+                    if 'local_file_name'not in config:
                         config['local_file_name'] = ''
 
                     file_source = st.radio(
@@ -539,13 +538,13 @@ def generation_profile_creator():
                         ["Local file", "Upload"],
                         key=f"file_source_{layer_id}",
                         horizontal=True,
-                        index=0 if config['file_source'] == 'local' else 1,
+                        index=0 if config['file_source'] == 'local'else 1,
                         label_visibility="collapsed"
                     )
 
-                    config['file_source'] = 'local' if file_source == "Local file" else 'upload'
+                    config['file_source'] = 'local'if file_source == "Local file"else 'upload'
 
-                    if file_source == "Local file" and nk_files:
+                    if file_source == "Local file"and nk_files:
                         # Show selectbox with local files
                         # Find current selection index
                         if config['local_file_name'] and config['local_file_name'] in nk_files:
@@ -584,19 +583,19 @@ def generation_profile_creator():
 
                     is_incoherent = st.checkbox(
                         "Incoherent",
-                        value=config['coherency'] == 'i' or default_incoherent,
+                        value=config['coherency'] == 'i'or default_incoherent,
                         key=f"incoherent_{layer_id}",
                         help="Check for thick layers (>1 μm) like glass substrates to remove interference effects"
                     )
 
-                    config['coherency'] = 'i' if is_incoherent else 'c'
+                    config['coherency'] = 'i'if is_incoherent else 'c'
             
             # ================================================================
             # DOWN BUTTON
             # ================================================================
             with col_down:
                 if display_idx < len(st.session_state.layer_order) - 1:
-                    if st.button("⬇️", key=f"btn_down_{layer_id}", help="Move layer down"):
+                    if st.button("", key=f"btn_down_{layer_id}", help="Move layer down"):
                         # Swap with next
                         st.session_state.layer_order[display_idx], st.session_state.layer_order[display_idx + 1] = \
                             st.session_state.layer_order[display_idx + 1], st.session_state.layer_order[display_idx]
@@ -608,7 +607,7 @@ def generation_profile_creator():
             # DELETE BUTTON
             # ================================================================
             with col_delete:
-                if st.button("❌", key=f"btn_delete_{layer_id}", help="Remove this layer"):
+                if st.button("", key=f"btn_delete_{layer_id}", help="Remove this layer"):
                     # Remove layer
                     st.session_state.layer_order.remove(layer_id)
                     if layer_id in st.session_state.layer_configs:
@@ -707,7 +706,7 @@ def generation_profile_creator():
             )
 
             st.info("""
-            📄 **File Format Requirements:**
+            **File Format Requirements:**
             - Two columns: `wavelength (nm)` and `irradiance (W/m²/nm)`
             - Tab or space separated
             - Comments starting with `#` are allowed
@@ -729,10 +728,10 @@ def generation_profile_creator():
             
             # Validate that all files are uploaded
             if any(layer['file'] is None for layer in layers):
-                st.error("❌ Please upload n-k files for all layers!")
+                st.error("Please upload n-k files for all layers!")
                 return
             
-            with st.spinner("🔄 Calculating generation profile with TMM..."):
+            with st.spinner("Calculating generation profile with TMM..."):
                 
                 try:
                     # Load all material files in display order
@@ -757,7 +756,7 @@ def generation_profile_creator():
                         materials.append(lambda w: 1.0 + 0j)
                         thicknesses.append(np.inf)
                         coherency_list.append('i')
-                        st.info("📌 Added air layer after back electrode (semi-transparent device mode)")
+                        st.info("Added air layer after back electrode (semi-transparent device mode)")
                     
                     # Ensure last layer is incoherent (required by TMM)
                     coherency_list[-1] = 'i'
@@ -767,7 +766,7 @@ def generation_profile_creator():
                     
                     # Check if active layer is coherent
                     if coherency_list[active_idx] == 'i':
-                        st.warning("⚠️ Active layer is marked as incoherent. Generation profiles work best with coherent active layers.")
+                        st.warning("Active layer is marked as incoherent. Generation profiles work best with coherent active layers.")
                     
                     # Display coherency status
                     coherent_layers = [layers[i]['name'] for i in range(len(layers)) 
@@ -776,7 +775,7 @@ def generation_profile_creator():
                                         if layers[i]['coherency'] == 'i']
                     
                     if incoherent_layers:
-                        st.info(f"🔄 **Incoherent layers:** {', '.join(incoherent_layers)}")
+                        st.info(f"**Incoherent layers:** {', '.join(incoherent_layers)}")
                     
                     # Create wavelength array
                     wavelengths = np.linspace(wl_min, wl_max, n_wavelengths)
@@ -784,7 +783,7 @@ def generation_profile_creator():
                     # Create or load solar spectrum
                     if spectrum_option == "White light":
                         solar_flux = 1e15 * np.ones_like(wavelengths)
-                        st.info("✓ Using flat white light spectrum")
+                        st.info("Using flat white light spectrum")
 
                     elif spectrum_option == "AM1.5G":
                         # Load AM1.5G from resources/Sunspectrum.sp
@@ -794,14 +793,14 @@ def generation_profile_creator():
                             try:
                                 spec_wl, spec_flux = load_solar_spectrum(resources_path)
                                 solar_flux = interpolate_solar_spectrum(spec_wl, spec_flux, wavelengths)
-                                st.success(f"✅ Loaded AM1.5G from {resources_path}: {len(spec_wl)} points from {spec_wl.min():.0f}-{spec_wl.max():.0f} nm")
+                                st.success(f"Loaded AM1.5G from {resources_path}: {len(spec_wl)} points from {spec_wl.min():.0f}-{spec_wl.max():.0f} nm")
                             except Exception as e:
                                 st.error(f"Failed to load AM1.5G spectrum: {e}")
-                                st.warning("⚠️ Using Gaussian approximation as fallback")
+                                st.warning("Using Gaussian approximation as fallback")
                                 solar_flux = 2e15 * np.exp(-((wavelengths - 500) / 150)**2)
                         else:
-                            st.warning(f"⚠️ AM1.5G spectrum file not found at {resources_path}")
-                            st.info("Place Sunspectrum.sp in the 'resources' folder, or use White light / Upload custom spectrum")
+                            st.warning(f"AM1.5G spectrum file not found at {resources_path}")
+                            st.info("Place Sunspectrum.sp in the 'resources'folder, or use White light / Upload custom spectrum")
                             st.warning("Using Gaussian approximation as fallback")
                             solar_flux = 2e15 * np.exp(-((wavelengths - 500) / 150)**2)
 
@@ -811,14 +810,14 @@ def generation_profile_creator():
                             try:
                                 spec_wl, spec_flux = load_solar_spectrum(solar_spectrum_file)
                                 solar_flux = interpolate_solar_spectrum(spec_wl, spec_flux, wavelengths)
-                                st.success(f"✅ Loaded custom spectrum: {len(spec_wl)} points from {spec_wl.min():.0f}-{spec_wl.max():.0f} nm")
+                                st.success(f"Loaded custom spectrum: {len(spec_wl)} points from {spec_wl.min():.0f}-{spec_wl.max():.0f} nm")
                             except Exception as e:
                                 st.error(f"Failed to load uploaded spectrum: {e}")
-                                st.warning("⚠️ Using white light as fallback")
+                                st.warning("Using white light as fallback")
                                 solar_flux = 1e15 * np.ones_like(wavelengths)
                         else:
-                            st.error("❌ Please upload a spectrum file!")
-                            st.warning("⚠️ Using white light as fallback")
+                            st.error("Please upload a spectrum file!")
+                            st.warning("Using white light as fallback")
                             solar_flux = 1e15 * np.ones_like(wavelengths)
 
                     else:
@@ -826,7 +825,7 @@ def generation_profile_creator():
                         solar_flux = 1e15 * np.ones_like(wavelengths)
                     
                     # Show spectrum preview
-                    with st.expander("📊 Preview Solar Spectrum"):
+                    with st.expander("Preview Solar Spectrum"):
                         import plotly.graph_objects as go
                         
                         fig_spectrum = go.Figure()
@@ -865,7 +864,7 @@ def generation_profile_creator():
                     test_wl = wavelengths[len(wavelengths)//2]
                     n_list = [mat(test_wl) for mat in materials]
                     
-                    if 'i' in coherency_list:
+                    if 'i'in coherency_list:
                         result = tmm.inc_tmm('s', n_list, thicknesses, coherency_list, 0, test_wl)
                     else:
                         result = tmm.coh_tmm('s', n_list, thicknesses, 0, test_wl)
@@ -880,7 +879,7 @@ def generation_profile_creator():
                     # Create header in the format matching app.py expectations
                     header_lines = "Charge generation [cm^-3*s^-1]\n"
                     header_lines += "Column format:\n"
-                    header_lines += "x (nm)\t" + "\t".join([f"{int(w)} nm" for w in wavelengths])
+                    header_lines += "x (nm)\t"+ "\t".join([f"{int(w)} nm"for w in wavelengths])
 
                     # Combine position and generation data
                     output_data = np.column_stack([z_positions, generation])
@@ -902,7 +901,7 @@ def generation_profile_creator():
                     # Success message and preview
                     # ========================================================
                     
-                    st.success("✅ Generation profile calculated successfully!")
+                    st.success("Generation profile calculated successfully!")
                     
                     # Interactive Plotly visualization
                     import plotly.graph_objects as go
@@ -918,7 +917,7 @@ def generation_profile_creator():
                     for lam in wavelengths:
                         n_list = [mat(lam) for mat in materials]
                         try:
-                            if 'i' in coherency_list:
+                            if 'i'in coherency_list:
                                 result = tmm.inc_tmm('s', n_list, thicknesses, coherency_list, 0, lam)
                                 # Get absorption in active layer only
                                 layer_absorp = tmm.inc_absorp_in_each_layer(result)
@@ -969,8 +968,8 @@ def generation_profile_creator():
                             fill='tozeroy',
                             fillcolor='rgba(220, 20, 60, 0.3)',
                             name='Total G(z)',
-                            hovertemplate='<b>Depth:</b> %{x:.1f} nm<br>' +
-                                        '<b>Generation:</b> %{y:.2f}×10²¹ cm⁻³s⁻¹<br>' +
+                            hovertemplate='<b>Depth:</b> %{x:.1f} nm<br>'+
+                                        '<b>Generation:</b> %{y:.2f}×10²¹ cm⁻³s⁻¹<br>'+
                                         '<extra></extra>',
                             showlegend=False
                         ),
@@ -1012,9 +1011,9 @@ def generation_profile_creator():
                                 len=0.45,
                                 y=0.75
                             ),
-                            hovertemplate='<b>Wavelength:</b> %{x:.0f} nm<br>' +
-                                        '<b>Depth:</b> %{y:.1f} nm<br>' +
-                                        '<b>Generation:</b> %{z:.2f}×10²¹ cm⁻³s⁻¹<br>' +
+                            hovertemplate='<b>Wavelength:</b> %{x:.0f} nm<br>'+
+                                        '<b>Depth:</b> %{y:.1f} nm<br>'+
+                                        '<b>Generation:</b> %{z:.2f}×10²¹ cm⁻³s⁻¹<br>'+
                                         '<extra></extra>',
                             name='G(z,λ)',
                             showscale=True
@@ -1051,8 +1050,8 @@ def generation_profile_creator():
                             fill='tozeroy',
                             fillcolor='rgba(50, 120, 180, 0.3)',
                             name='Absorptance',
-                            hovertemplate='<b>Wavelength:</b> %{x:.0f} nm<br>' +
-                                        '<b>Absorptance:</b> %{y:.1f}%<br>' +
+                            hovertemplate='<b>Wavelength:</b> %{x:.0f} nm<br>'+
+                                        '<b>Absorptance:</b> %{y:.1f}%<br>'+
                                         '<extra></extra>',
                             showlegend=False
                         ),
@@ -1104,7 +1103,7 @@ def generation_profile_creator():
                     for lam in wavelengths:
                         n_list = [mat(lam) for mat in materials]
                         try:
-                            if 'i' in coherency_list:
+                            if 'i'in coherency_list:
                                 result_rt = tmm.inc_tmm('s', n_list, thicknesses, coherency_list, 0, lam)
                             else:
                                 result_rt = tmm.coh_tmm('s', n_list, thicknesses, 0, lam)
@@ -1113,7 +1112,7 @@ def generation_profile_creator():
                             total_T.append(result_rt['T'])
                             
                             # Sum absorption in all layers (should equal 1 - R - T)
-                            if 'i' in coherency_list:
+                            if 'i'in coherency_list:
                                 layer_absorp = tmm.inc_absorp_in_each_layer(result_rt)
                             else:
                                 layer_absorp = tmm.absorp_in_each_layer(result_rt)
@@ -1158,9 +1157,9 @@ def generation_profile_creator():
                                 mode='lines',
                                 line=dict(color=colors[layer_trace_count % len(colors)], width=2),
                                 name=layer_name,
-                                hovertemplate='<b>Wavelength:</b> %{x:.0f} nm<br>' +
-                                            '<b>Absorptance:</b> %{y:.2f}%<br>' +
-                                            f'<b>Layer:</b> {layer_name}<br>' +
+                                hovertemplate='<b>Wavelength:</b> %{x:.0f} nm<br>'+
+                                            '<b>Absorptance:</b> %{y:.2f}%<br>'+
+                                            f'<b>Layer:</b> {layer_name}<br>'+
                                             '<extra></extra>',
                                 legendgroup=f'layer_{i}',  # Unique legend group for each layer
                                 showlegend=True
@@ -1177,8 +1176,8 @@ def generation_profile_creator():
                             mode='lines',
                             line=dict(color='rgb(0, 0, 0)', width=2.5, dash='dash'),
                             name='Reflection',
-                            hovertemplate='<b>Wavelength:</b> %{x:.0f} nm<br>' +
-                                        '<b>Reflectance:</b> %{y:.2f}%<br>' +
+                            hovertemplate='<b>Wavelength:</b> %{x:.0f} nm<br>'+
+                                        '<b>Reflectance:</b> %{y:.2f}%<br>'+
                                         '<extra></extra>',
                             legendgroup='reflection',  # Unique legend group
                             showlegend=True
@@ -1194,8 +1193,8 @@ def generation_profile_creator():
                                 mode='lines',
                                 line=dict(color='rgb(100, 100, 100)', width=2.5, dash='dot'),
                                 name='Transmission',
-                                hovertemplate='<b>Wavelength:</b> %{x:.0f} nm<br>' +
-                                            '<b>Transmittance:</b> %{y:.2f}%<br>' +
+                                hovertemplate='<b>Wavelength:</b> %{x:.0f} nm<br>'+
+                                            '<b>Transmittance:</b> %{y:.2f}%<br>'+
                                             '<extra></extra>',
                                 legendgroup='transmission',  # Unique legend group
                                 showlegend=True
@@ -1253,7 +1252,7 @@ def generation_profile_creator():
                     # ========================================================
                     
                     st.download_button(
-                        label="📥 Download Generation Profile",
+                        label="Download Generation Profile",
                         data=file_content,
                         file_name="generation_profile_TMM.txt",
                         mime="text/plain",
@@ -1331,15 +1330,15 @@ def generation_profile_creator():
                         )
                     
                     st.info(
-                        "💡 **Tip**: Download the file above and use it as the "
+                        "**Tip**: Download the file above and use it as the "
                         "generation profile input for SCE extraction analysis."
                     )
                     
                 except Exception as e:
-                    st.error(f"❌ Calculation failed: {str(e)}")
+                    st.error(f"Calculation failed: {str(e)}")
                     
                     # Show detailed error for debugging
-                    with st.expander("🔍 Error Details"):
+                    with st.expander("Error Details"):
                         import traceback
                         st.code(traceback.format_exc())
 
@@ -1358,11 +1357,11 @@ if __name__ == "__main__":
     This is an enhanced demo with **layer reordering and deletion** support.
     
     ### New Features:
-    - ⬆️ **Move Up**: Click to move a layer toward the front of the device
-    - ⬇️ **Move Down**: Click to move a layer toward the back of the device
-    - ❌ **Delete**: Click to remove a layer
-    - ✅ **Persistent Active Layer**: Active layer selection remains correct when adding/removing/reordering layers
-    - 🔄 **Real-time Updates**: Changes apply immediately
+    - **Move Up**: Click to move a layer toward the front of the device
+    - **Move Down**: Click to move a layer toward the back of the device
+    - **Delete**: Click to remove a layer
+    - **Persistent Active Layer**: Active layer selection remains correct when adding/removing/reordering layers
+    - **Real-time Updates**: Changes apply immediately
     """)
     
     generation_profile_creator()
