@@ -825,9 +825,24 @@ else:
 show_gen_preview = gen_file and st.sidebar.button("Preview generation", key="preview_gen")
 
 st.sidebar.subheader("Incident spectrum")
-sun_source = st.sidebar.radio("Source:", ["Default (Sunspectrum.sp)", "Upload spectrum", "Photon flux file"], key="sun_source")
+sun_source = st.sidebar.radio(
+    "Source:",
+    ["White light", "Default (AM1.5G)", "Upload spectrum", "Photon flux file"],
+    key="sun_source",
+    help="How the incident spectrum is defined for the fit. 'White light' uses a flat (wavelength-independent) spectrum.",
+)
 is_photon_flux = (sun_source == "Photon flux file")
-if sun_source == "Default (Sunspectrum.sp)":
+use_white = (sun_source == "White light")
+if sun_source == "White light":
+    # Reuse the default spectrum file only as a wavelength scaffold; prepare_input
+    # overwrites the irradiance column with 1 when use_white_light=True.
+    if Path(default_sun_path).exists():
+        sun_file = default_sun_path
+        st.sidebar.success("Using flat (white) spectrum")
+    else:
+        st.sidebar.error("Default spectrum not found (needed as wavelength scaffold)!")
+        sun_file = None
+elif sun_source == "Default (AM1.5G)":
     if Path(default_sun_path).exists():
         sun_file = default_sun_path
         st.sidebar.success("Using default AM1.5G spectrum")
@@ -926,7 +941,6 @@ with sb_col5:
 
 # Processing options (stacked vertically in sidebar)
 st.sidebar.markdown("**Processing options**")
-use_white = st.sidebar.checkbox("White light", value=True, help="Override with flat spectrum (enable for white light generation profiles)")
 screen_out_of_bounds = st.sidebar.checkbox("Screen by bounds", value=True,
                                    help="Exclude solutions with φ outside bounds from CV optimal search")
 if screen_out_of_bounds:
