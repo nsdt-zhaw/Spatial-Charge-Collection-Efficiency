@@ -911,41 +911,54 @@ def read_uploaded_data(eqe_file, gen_file, sun_file, x1, x2):
 
 
 def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None, wl_min=None, wl_max=None, use_first_derivative=False, is_photon_flux=False):
-    """Build feature matrix X, response vector y, and regularization L.
+    """Build the Tikhonov system (X, y, L) for SCE extraction.
 
-    Parameters:
-    -----------
-    pos : array
-        Position array (depth in nm)
-    gen : array
-        Generation profile data (n_positions x n_wavelengths)
-    eqe : array
-        EQE data with columns [wavelength, EQE]
-    sun_spec : array
-        Solar spectrum with columns [wavelength, flux] OR delta photon flux with columns [wavelength, photons/s/cm²]
-    use_white_light : bool
-        Whether to use white light (flat spectrum)
-    gen_wavelengths : array, optional
-        Wavelengths from generation file header. If provided, EQE will be interpolated to these wavelengths.
-    wl_min : float, optional
-        Minimum wavelength (nm) to include in analysis
-    wl_max : float, optional
-        Maximum wavelength (nm) to include in analysis
-    use_first_derivative : bool, optional
-        If True, use first derivative operator for regularization; if False, use second derivative (default: False)
-    is_photon_flux : bool, optional
-        If True, sun_spec contains photon flux [photons/s/cm²] instead of spectrum [W/m²/nm] (default: False)
+    EXPECTED INPUT UNITS
+    --------------------
+    pos       : depth in nm.
+    gen       : spectral generation rate in cm^-3 s^-1, shape (n_z, n_wl).
+    eqe       : (wavelength [nm], EQE [-]).
+    sun_spec  : (wavelength [nm], value); the meaning of "value" depends on
+                is_photon_flux:
+                  is_photon_flux=False -> spectral irradiance in W m^-2 nm^-1
+                                          (converted internally to photon flux).
+                  is_photon_flux=True  -> photon flux in photons s^-1 m^-2.
+    use_white_light : if True (and not is_photon_flux), overwrite the spectrum
+                      with 1 to decouple results from the AM1.5G shape.
+
+    INTERNAL UNIT CONVERSIONS (the /1e21 and /1e18 factors)
+    -------------------------------------------------------
+    The fit equation X w = y must be dimensionally homogeneous. A row of
+    X is (gen column) * (trap weight on pos), so [X] = [gen] * [length].
+    A row of y is EQE * photon_flux_per_area, so [y] = [flux_per_area].
+    With pos in nm, both sides have to be expressed in nm units:
+
+        gen / 1e21   :  cm^-3 s^-1 -> nm^-3 s^-1   (1 cm = 1e7 nm)
+        flux / 1e18  :  m^-2 s^-1  -> nm^-2 s^-1   (1 m  = 1e9 nm)
+
+    After the conversions, X and y both carry units of nm^-2 s^-1 (areal
+    photon generation rate) and the Tikhonov equation balances:
+
+        X = (gen / 1e21).T * trap_weights(pos_nm)   # nm^-2 s^-1
+        y = EQE * (photon_flux / 1e18)              # nm^-2 s^-1
+
+    An equivalent form uses pos in cm, gen in cm^-3 s^-1, flux in
+    photons s^-1 cm^-2 and no divisors; it yields the same SCE profile
+    and EQE fit but shifts alpha and CV MSE by predictable factors:
+
+        alpha_app = alpha_cgs * 1e14           # (|X|/|L|)^2 ratio
+        MSE_app   = MSE_cgs   * 1e-28          # |y|^2 ratio
+
+    L (regularization) is built on pos_nm as a 1st- or 2nd-derivative
+    operator per use_first_derivative.
 
     Returns:
     --------
-    X : array
-        Feature matrix
-    y : array
-        Response vector
-    L : array
-        Regularization matrix
-    (lam, pos, photon_flux, gen) : tuple
-        Wavelengths, positions, incident photon flux, and filtered generation profile
+    X : (n_wl, n_z)  design matrix in nm units
+    y : (n_wl,)      target in nm units
+    L : regularization matrix built on pos_nm
+    (lam, pos, photon_flux, gen) : diagnostics (wavelengths, depths,
+                                   converted photon flux, filtered gen)
     """
     if use_white_light and not is_photon_flux:
         sun_spec = sun_spec.copy()  # Don't modify original
@@ -994,18 +1007,22 @@ def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None
         eqe_vals_interp = eqe_vals_interp[wl_mask]
         gen = gen[:, wl_mask]  # Filter generation columns
 
-    # Build feature matrix with filtered data
+    # Design matrix. gen is in cm^-3 s^-1, pos in nm; /1e21 converts
+    # cm^-3 -> nm^-3 so X carries nm^-2 s^-1 (areal rate).
     dp = np.diff(pos)
     weights = np.concatenate(([0.5*dp[0]], 0.5*(dp[:-1]+dp[1:]), [0.5*dp[-1]]))
     X = (gen / 1e21).T * weights
 
-    # Interpolate spectrum/photon_flux onto the target wavelengths
+    # Photon flux on the target wavelength grid. Both branches end in
+    # photons s^-1 nm^-2 (m^-2 -> nm^-2 via /1e18), matching X's nm units.
     interp_flux = interp1d(sun_spec[:, 0], sun_spec[:, 1], bounds_error=False, fill_value=0)
     if is_photon_flux:
-        # Photon flux file: values are already in photons/s/cm², just scale to 10^18
+        # Input file is already photons s^-1 m^-2; /1e18 -> photons s^-1 nm^-2.
         photon_flux = interp_flux(lam) / 1e18
     else:
-        # Spectrum file: convert from W/m²/nm to 10^18 photons/s/cm²
+        # Input file is spectral irradiance W m^-2 nm^-1; convert to photon
+        # flux via E_photon = h*c/lambda (-> photons s^-1 m^-2 nm^-1), then
+        # /1e18 converts the m^-2 to nm^-2 to match X's nm units.
         photon_flux = interp_flux(lam) / (h * c_nm / lam) / 1e18
     y = eqe_vals_interp * photon_flux
 
