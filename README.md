@@ -121,7 +121,7 @@ The two EQE files compare a device with and without mobile ions, sharing the sam
 ```
 app.py                  - Main Streamlit application
 manual_sce_fitting.py   - Manual φ explorer module
-tmm_generator.py        - Transfer Matrix Method generator (optional)
+tmm_generator.py        - Transfer Matrix Method generator
 resources/
   eqe data/             - Example EQE measurements
   gen data/             - Example generation profiles (coherent and incoherent)
@@ -138,7 +138,7 @@ resources/
 - scipy >= 1.11.0
 - scikit-learn >= 1.3.0
 - plotly >= 5.17.0
-- tmm >= 0.1.8 (optional, enables the TMM generator)
+- tmm >= 0.1.8
 
 ## Acknowledgments
 

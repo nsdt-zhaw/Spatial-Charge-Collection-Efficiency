@@ -23,11 +23,7 @@ try:
     TMM_AVAILABLE = True
 except ImportError:
     TMM_AVAILABLE = False
-    st.warning("""
-    TMM generator not available. To enable:
-    1. Place `tmm_generator.py` in the same folder as `app.py`
-    2. Run: `pip install tmm`
-    """)
+    st.error("TMM generator unavailable. Install the required dependency with `pip install tmm`.")
 
 try:
     from manual_sce_fitting import manual_sce_fitting_tab
