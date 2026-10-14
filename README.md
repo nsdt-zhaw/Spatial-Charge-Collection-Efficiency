@@ -1,6 +1,6 @@
-# EQE Fitting and SCE Extraction
+# EQE Fitting and φ(z) Extraction
 
-A Streamlit application for extracting Spatial Collection Efficiency (SCE) profiles from External Quantum Efficiency (EQE) measurements and optical generation profiles of photovoltaic devices.
+A Streamlit application for extracting the collection probability $\varphi(z)$ from External Quantum Efficiency (EQE) measurements and optical generation profiles of photovoltaic devices.
 
 ## Try It Online
 
@@ -10,42 +10,36 @@ No installation required — upload your data and start analyzing directly in th
 
 ## Features
 
-### Automatic SCE Extraction
-- Tikhonov (ridge) regression with k-fold cross-validation to find the optimal regularization strength
+### Automatic φ(z) Extraction
+- Tikhonov (ridge) regression with k-fold cross-validation to find the optimal regularization strength $\gamma$
 - First or second derivative regularization matrix
-- Interactive alpha slider to explore the regularization landscape after fitting
-- Solver options: direct solve with optional clipping to [0,1], or bounded optimization (scipy `lsq_linear`)
+- Interactive γ slider to explore the regularization landscape after fitting
 
 ### Batch Processing
 - Analyze multiple EQE files simultaneously against a shared generation profile
-- Comparison plots for CV curves, SCE profiles, and EQE fits side by side
-- Summary table with per-file metrics (alpha, MSE, Jsc)
-
-### Weighted Averaging Mode
-- 1/MSE weighted average across multiple alpha solutions instead of single CV-optimal
-- Uncertainty band visualization
-- Configurable saturation detection with MSE derivative threshold
+- Comparison plots for CV curves, φ profiles, and EQE fits side by side
+- Summary table with per-file metrics (γ, MSE, Jsc)
 
 ### Weighted Fitting
 - Prioritize specific wavelength regions during fitting with a configurable weight factor
 - Useful when certain parts of the EQE spectrum are more reliable or important
 
 ### Bounds Screening
-- During cross-validation, SCE solutions with values outside physically valid bounds are excluded from the optimal alpha search
-- Enabled by default with [0, 1] bounds, ensuring only physically meaningful SCE profiles are considered
+- During cross-validation, φ solutions with values outside physically valid bounds are excluded from the optimal γ search
+- Enabled by default with [0, 1] bounds, ensuring only physically meaningful φ profiles are considered
 - Configurable bounds for advanced use cases
 
-### SCE Smoothing
+### φ Smoothing
 - Post-extraction smoothing with Savitzky-Golay filter or smoothing spline
 - Real-time MSE feedback showing the effect of smoothing on fit quality
 
-### Reference SCE Comparison
-- Upload reference SCE profiles to overlay on results
+### Reference φ Comparison
+- Upload reference φ profiles to overlay on results
 - Adjustable horizontal shift for alignment
 
-### Manual SCE Explorer
-- Upload a pre-existing SCE profile and immediately evaluate how well it reconstructs the measured EQE
-- Displays MSE, R² score, and side-by-side SCE and EQE comparison plots
+### Manual φ Explorer
+- Upload a pre-existing φ profile and immediately evaluate how well it reconstructs the measured EQE
+- Displays MSE, R² score, and side-by-side φ and EQE comparison plots
 
 ### TMM Generation Profile Calculator
 - Built-in Transfer Matrix Method (TMM) calculator for computing optical generation profiles from device layer stacks, based on the [tmm](https://github.com/sbyrnes321/tmm) Python package
@@ -61,7 +55,7 @@ No installation required — upload your data and start analyzing directly in th
 - White light mode for flat-spectrum analysis
 
 ### Export
-- Download all results as a ZIP archive (SCE profiles, CV data, EQE fits, generation analysis, settings summary)
+- Download all results as a ZIP archive (φ profiles, CV data, EQE fits, generation analysis, settings summary)
 - Individual file downloads available
 - Batch mode produces per-file results in a single ZIP
 
@@ -86,13 +80,13 @@ streamlit run app.py
 | Solar spectrum | Two-column: wavelength (nm), irradiance (W/m²/nm) |
 | Photon flux | Two-column: wavelength (nm), photon flux (photons/s/cm²) |
 | n-k data (TMM) | Three-column: wavelength, n, k |
-| SCE profile | Two-column: position (nm), SCE value |
+| φ profile | Two-column: position (nm), φ value |
 
 ## Example Data
 
 The app includes built-in example datasets to get started. Each example requires a specific combination of EQE, generation profile, spectrum, and CTL boundary settings:
 
-### Simulated example (drift-diffusion simulation with known ground-truth SCE)
+### Simulated example (drift-diffusion simulation with known ground-truth φ(z))
 
 | Setting | Value |
 |---|---|
@@ -100,9 +94,9 @@ The app includes built-in example datasets to get started. Each example requires
 | Generation | `simulated_example_generation.txt` |
 | Spectrum | Photon flux file: `simulated_example_photon_flux.txt` |
 | Boundaries | x1 = 50 nm, x2 = 600 nm |
-| Reference SCE | `simulated_example_SCE.txt` / `simulated_example_SCE_noions.txt` |
+| Reference φ | `simulated_example_SCE.txt` / `simulated_example_SCE_noions.txt` |
 
-The two EQE files compare a device with and without mobile ions, sharing the same generation profile and photon flux spectrum. The reference SCE profiles in `sce data/` provide the ground truth for validation.
+The two EQE files compare a device with and without mobile ions, sharing the same generation profile and photon flux spectrum. The reference φ profiles in `sce data/` provide the ground truth for validation.
 
 ### Experimental example 1
 
@@ -126,12 +120,12 @@ The two EQE files compare a device with and without mobile ions, sharing the sam
 
 ```
 app.py                  - Main Streamlit application
-manual_sce_fitting.py   - Manual SCE explorer module
+manual_sce_fitting.py   - Manual φ explorer module
 tmm_generator.py        - Transfer Matrix Method generator (optional)
 resources/
   eqe data/             - Example EQE measurements
   gen data/             - Example generation profiles (coherent and incoherent)
-  sce data/             - Reference SCE profiles for validation
+  sce data/             - Reference φ profiles for validation
   nk data/              - Optical constants for TMM
   Sunspectrum.sp        - AM1.5G solar spectrum
 ```
