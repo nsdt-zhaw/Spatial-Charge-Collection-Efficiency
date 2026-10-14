@@ -483,7 +483,7 @@ def preview_generation_profile(gen_file):
         return None, None, None, None, None
 
 # Page config
-st.set_page_config(page_title="φ Extraction Analysis", layout="wide")
+st.set_page_config(page_title="Collection Probability Analysis", layout="wide")
 
 # Initialize manual fitting state to closed on first load
 if 'manual_fitting_open'not in st.session_state:
