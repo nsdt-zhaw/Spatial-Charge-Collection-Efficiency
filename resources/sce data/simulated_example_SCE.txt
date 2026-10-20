@@ -1,4 +1,5 @@
-# # Depth (nm)    SCE
+# Simulated-example ground-truth phi(z) (with mobile ions) from drift-diffusion
+# Columns: depth (nm, absorber-relative)	phi (dimensionless, 0-1)
 0.000000	0.966286
 12.500000	0.960869
 25.000000	0.952302

@@ -1,4 +1,5 @@
-# # Wavelength (nm)	EQE
+# Simulated-example EQE from drift-diffusion (5% perturbation method)
+# Columns: wavelength (nm)	EQE (dimensionless, 0-1)
 315.000000	0.388954
 325.000000	0.503290
 335.000000	0.604517
