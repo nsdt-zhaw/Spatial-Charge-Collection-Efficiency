@@ -1,6 +1,6 @@
 # EQE Fitting and φ(z) Extraction
 
-A Streamlit application for extracting the collection probability $\varphi(z)$ from External Quantum Efficiency (EQE) measurements and optical generation profiles of photovoltaic devices.
+A Streamlit application for extracting the depth-resolved charge collection probability $\varphi(z)$ — also known as the spatial collection efficiency (SCE) — from External Quantum Efficiency (EQE) measurements and optical generation profiles of photovoltaic devices.
 
 ## Try It Online
 
@@ -28,10 +28,6 @@ No installation required — upload your data and start analyzing directly in th
 - During cross-validation, φ solutions with values outside physically valid bounds are excluded from the optimal γ search
 - Enabled by default with [0, 1] bounds, ensuring only physically meaningful φ profiles are considered
 - Configurable bounds for advanced use cases
-
-### φ Smoothing
-- Post-extraction smoothing with Savitzky-Golay filter or smoothing spline
-- Real-time MSE feedback showing the effect of smoothing on fit quality
 
 ### Reference φ Comparison
 - Upload reference φ profiles to overlay on results
@@ -128,6 +124,8 @@ resources/
 The Streamlit GUI for this app was built with assistance from [Claude](https://claude.ai) by Anthropic.
 
 The perovskite, SAM, SnO₂ and glass n,k datasets under `resources/nk data/dasgupta/` are redistributed from the [Perovskite-Dielectric-Constants-Repository](https://github.com/akashdasgupta/Perovskite-Dielectric-Constants-Repository) by Dasgupta et al.
+
+Several of the common-material n,k files at the top level of `resources/nk data/` (e.g. Au, C60, FTO, ITO, MgF₂, PEDOT, TiO₂, glass) are taken from the [SIMsalabim data directory](https://github.com/kostergroup/SIMsalabim/tree/master/Data).
 
 ## License
 
