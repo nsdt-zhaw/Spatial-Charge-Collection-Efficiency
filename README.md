@@ -103,9 +103,9 @@ The app will open in your default browser at `http://localhost:8501`.
 
 ## Example Data
 
-The app includes a built-in example dataset to get started, from a drift-diffusion simulation with known ground-truth φ(z):
+The app ships two built-in example datasets:
 
-### Simulated example
+### 1. Simulated example (drift-diffusion with known ground-truth φ(z))
 
 | Setting | Value |
 |---|---|
@@ -116,6 +116,18 @@ The app includes a built-in example dataset to get started, from a drift-diffusi
 | Reference φ | `simulated_example_SCE.txt` / `simulated_example_SCE_noions.txt` |
 
 The two EQE files compare a device with and without mobile ions, sharing the same generation profile and photon flux spectrum. The reference φ profiles in `sce data/` provide the ground truth for validation.
+
+### 2. Experimental example — PSC7 pulsed EQE at Vpre = 0.7 V (reproduces one case of main-text Fig. 6)
+
+| Setting | Value |
+|---|---|
+| EQE | `experimental_pulsed_EQE_Vpre_0p7V.txt` (pulsed EQE at V_MPP = 0.77 V after 0.7 V preconditioning) |
+| Generation | `experimental_generation.txt` (Beer-Lambert, D = 700 nm, α_k from Dasgupta `FACsPb_Br010_Eg1.48eV.nk`, built at 1 sun AM1.5G) |
+| Spectrum | Select **Default (AM1.5G)** under *Incident spectrum* (the generation file is built at the same 1 sun scaling) |
+| Boundaries | x1 = 0 nm, x2 = 700 nm (absorber only) |
+| Fit range | 350–800 nm; recommend down-weighting 750–800 nm |
+
+Reproduces the Vpre = 0.7 V case from the main-text Fig. 6 pulsed-EQE series.
 
 ## Project Structure
 

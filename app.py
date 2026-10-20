@@ -699,11 +699,22 @@ def prepare_input(pos, gen, eqe, sun_spec, use_white_light, gen_wavelengths=None
         st.info(f"Interpolating EQE from {len(eqe_wavelengths)} points ({eqe_wavelengths.min():.0f}-{eqe_wavelengths.max():.0f} nm) "
                 f"to {len(gen_wavelengths)} generation wavelengths ({gen_wavelengths.min():.0f}-{gen_wavelengths.max():.0f} nm)")
 
-        # Interpolate EQE onto generation wavelengths
+        # Interpolate EQE onto generation wavelengths. Use NaN outside the
+        # measured EQE range so we can drop those points rather than silently
+        # zero-filling them (which would act as spurious EQE=0 measurements).
         interp_eqe = interp1d(eqe_wavelengths, eqe_vals, kind='linear',
-                             bounds_error=False, fill_value=0)
+                             bounds_error=False, fill_value=np.nan)
         lam = gen_wavelengths
         eqe_vals_interp = interp_eqe(lam)
+
+        eqe_coverage_mask = ~np.isnan(eqe_vals_interp)
+        if not eqe_coverage_mask.all():
+            n_oor = int((~eqe_coverage_mask).sum())
+            st.warning(f"{n_oor} generation wavelength(s) fall outside the EQE's measured range "
+                       f"[{eqe_wavelengths.min():.0f}–{eqe_wavelengths.max():.0f} nm] and will be excluded from the fit.")
+            lam = lam[eqe_coverage_mask]
+            eqe_vals_interp = eqe_vals_interp[eqe_coverage_mask]
+            gen = gen[:, eqe_coverage_mask]
     else:
         # Use EQE wavelengths as-is (original behavior)
         lam = eqe_wavelengths
