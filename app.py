@@ -933,7 +933,7 @@ with sb_col3:
 with sb_col4:
     alpha_max = st.number_input("log₁₀(γ) max", value=14, help="Max regularization strength")
 with sb_col5:
-    n_alphas = st.number_input("# γ values", value=1000, min_value=100, max_value=2000, help="γ values to test")
+    n_alphas = st.number_input("# γ values", value=1000, min_value=10, max_value=2000, help="γ values to test")
 
 # Processing options (stacked vertically in sidebar)
 st.sidebar.markdown("**Processing options**")

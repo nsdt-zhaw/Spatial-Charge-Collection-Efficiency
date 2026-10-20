@@ -6,7 +6,7 @@ A Streamlit application for extracting the depth-resolved charge collection prob
 
 The app is deployed and accessible at: **https://sce-extraction.streamlit.app/**
 
-No installation required — upload your data and start analyzing directly in the browser.
+Upload your data and start analyzing directly in the browser. For heavier workloads (large generation grids, batch processing, long cross-validation sweeps), we recommend running the app locally — see [Installation (Local)](#installation-local) below.
 
 ## Features
 
@@ -57,15 +57,38 @@ No installation required — upload your data and start analyzing directly in th
 
 ## Installation (Local)
 
+Running locally is recommended for larger datasets or when the online app feels slow.
+
+**1. Clone the repository**
+
+```bash
+git clone https://github.com/nsdt-zhaw/Spatial-Charge-Collection-Efficiency.git
+cd Spatial-Charge-Collection-Efficiency
+```
+
+**2. (Optional but recommended) Create a virtual environment**
+
+```bash
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS / Linux:
+source .venv/bin/activate
+```
+
+**3. Install the dependencies**
+
 ```bash
 pip install -r requirements.txt
 ```
 
-Run the app locally:
+**4. Launch the Streamlit app**
 
 ```bash
 streamlit run app.py
 ```
+
+The app will open in your default browser at `http://localhost:8501`.
 
 ### Input File Formats
 
