@@ -97,7 +97,7 @@ def manual_sce_fitting_tab(pos, gen, eqe, sun_spec, use_white_light, gen_wavelen
         fig_sce.add_trace(go.Scatter(x=pos, y=sce_profile, mode='lines', line=dict(color='darkblue', width=2)))
         fig_sce.update_layout(title='SCE Profile', xaxis_title='Depth (nm)', yaxis_title='SCE',
                               yaxis_range=[0, 1], template='plotly_white', height=350)
-        st.plotly_chart(fig_sce, use_container_width=True)
+        st.plotly_chart(fig_sce, use_container_width=True, theme=None)
 
     with col2:
         fig_eqe = go.Figure()
@@ -105,7 +105,7 @@ def manual_sce_fitting_tab(pos, gen, eqe, sun_spec, use_white_light, gen_wavelen
         fig_eqe.add_trace(go.Scatter(x=lam, y=eqe_fitted, mode='lines', name='From SCE', line=dict(color='red', width=2, dash='dash')))
         fig_eqe.update_layout(title='EQE Comparison', xaxis_title='Wavelength (nm)', yaxis_title='EQE',
                               template='plotly_white', height=350, legend=dict(x=0.02, y=0.98))
-        st.plotly_chart(fig_eqe, use_container_width=True)
+        st.plotly_chart(fig_eqe, use_container_width=True, theme=None)
 
     # Download EQE comparison
     eqe_buffer = io.StringIO()

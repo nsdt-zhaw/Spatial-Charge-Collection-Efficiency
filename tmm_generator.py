@@ -863,7 +863,7 @@ def generation_profile_creator():
                             plot_bgcolor='white',
                             margin=dict(l=60, r=40, t=60, b=60)
                         )
-                        st.plotly_chart(fig_spectrum, use_container_width=True)
+                        st.plotly_chart(fig_spectrum, use_container_width=True, theme=None)
                     
                     # Calculate generation profile
                     z_positions, generation = calculate_generation_tmm(
@@ -1259,7 +1259,7 @@ def generation_profile_creator():
                         margin=dict(l=70, r=120, t=80, b=70)
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, theme=None)
                     
                     # ========================================================
                     # Download button

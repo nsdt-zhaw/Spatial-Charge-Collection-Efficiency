@@ -860,7 +860,7 @@ if 'show_eqe_preview'in locals() and show_eqe_preview and eqe_file_list:
             if len(eqe_file_list) == 1:
                 fig, wls, eqe_vals = preview_eqe_data(eqe_file_list[0])
                 if fig is not None:
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, theme=None)
             else:
                 # Batch preview: overlay all EQE files on one plot
                 fig = go.Figure()
@@ -892,7 +892,7 @@ if 'show_eqe_preview'in locals() and show_eqe_preview and eqe_file_list:
                     legend=dict(yanchor='top', y=1, xanchor='left', x=1.02),
                     margin=dict(l=60, r=150, t=60, b=60)
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, theme=None)
 
 # Display generation profile preview (full width outside columns)
 if 'show_gen_preview'in locals() and show_gen_preview and gen_file:
@@ -900,7 +900,7 @@ if 'show_gen_preview'in locals() and show_gen_preview and gen_file:
         with st.spinner("Loading preview..."):
             fig, z_pos, gen_data, wls, total_gen = preview_generation_profile(gen_file)
             if fig is not None:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, theme=None)
                 col_info1, col_info2, col_info3, col_info4, col_info5 = st.columns(5)
                 col_info1.metric("Depth points", len(z_pos))
                 col_info2.metric("Wavelengths", gen_data.shape[1])
@@ -1424,7 +1424,7 @@ if 'analysis_complete'in st.session_state and st.session_state.analysis_complete
             margin=dict(r=150)
         )
 
-        st.plotly_chart(fig_cv, use_container_width=True)
+        st.plotly_chart(fig_cv, use_container_width=True, theme=None)
 
         # Comparison plot - φ profiles overlaid
         st.subheader("φ Profile Comparison")
@@ -1573,7 +1573,7 @@ if 'analysis_complete'in st.session_state and st.session_state.analysis_complete
             margin=dict(r=150)
         )
 
-        st.plotly_chart(fig_compare, use_container_width=True)
+        st.plotly_chart(fig_compare, use_container_width=True, theme=None)
 
         # EQE comparison plot
         st.subheader("EQE Fit Comparison")
@@ -1627,7 +1627,7 @@ if 'analysis_complete'in st.session_state and st.session_state.analysis_complete
             margin=dict(r=150)
         )
 
-        st.plotly_chart(fig_eqe_compare, use_container_width=True)
+        st.plotly_chart(fig_eqe_compare, use_container_width=True, theme=None)
 
         # Download batch results
         st.subheader("Download Batch Results")
@@ -1944,7 +1944,7 @@ if 'analysis_complete'in st.session_state and st.session_state.analysis_complete
                 margin=dict(r=150)
             )
 
-            st.plotly_chart(fig1, use_container_width=True)
+            st.plotly_chart(fig1, use_container_width=True, theme=None)
 
         with col2:
             # Create interactive EQE fit plot with Plotly
@@ -2004,7 +2004,7 @@ if 'analysis_complete'in st.session_state and st.session_state.analysis_complete
                 margin=dict(r=150)
             )
 
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, use_container_width=True, theme=None)
 
         # Extract φ with uncertainty
         st.subheader("Extracted collection probability φ(z)")
@@ -2188,7 +2188,7 @@ if 'analysis_complete'in st.session_state and st.session_state.analysis_complete
                 margin=dict(r=150)
             )
 
-            st.plotly_chart(fig3, use_container_width=True)
+            st.plotly_chart(fig3, use_container_width=True, theme=None)
 
         # SCE × Generation Analysis (only if checkbox is selected)
         if show_gen_analysis:
@@ -2300,7 +2300,7 @@ if 'analysis_complete'in st.session_state and st.session_state.analysis_complete
                     margin=dict(r=200)
                 )
 
-                st.plotly_chart(fig4, use_container_width=True)
+                st.plotly_chart(fig4, use_container_width=True, theme=None)
 
                 # Show final Jsc value
                 final_jsc = cumulative_jsc_current[-1]
